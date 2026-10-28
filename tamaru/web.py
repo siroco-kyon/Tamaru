@@ -25,6 +25,7 @@ from .inventory import Inventory, ScanLock
 from .jobs import Collector, DEFAULT_SCHEDULE
 from .deletion import DeletionService
 from .security import Store
+from .reports import daily_trends, storage_usage
 
 STATIC = Path(__file__).with_name("static")
 NETWORKS = [
@@ -317,6 +318,14 @@ def create_app(
     @app.get("/api/browse")
     def browse(request: Request, user=Depends(admin)):
         return inventory.browse(safe_params(request))
+
+    @app.get("/api/trends")
+    def trends(days: int = 30, root: int | None = None, user=Depends(admin)):
+        return daily_trends(inventory, root_id=root, days=days)
+
+    @app.get("/api/storage")
+    def storage(user=Depends(admin)):
+        return {**storage_usage(inventory), "warning": collector.storage_warning}
 
     @app.get("/api/export")
     def export(request: Request, user=Depends(admin)):

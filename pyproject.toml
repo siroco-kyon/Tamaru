@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tamaru"
-version = "0.2.0"
+version = "0.3.0"
 description = "Private LAN dashboard for shared-folder file retention"
 requires-python = ">=3.11"
 dependencies = ["fastapi>=0.162,<0.163", "uvicorn>=0.54,<0.55", "argon2-cffi>=25.1,<26", "tzdata>=2026.5"]

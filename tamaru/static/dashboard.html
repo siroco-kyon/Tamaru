@@ -148,11 +148,65 @@
             </div>
           </div>
         </section>
+        <section class="panel" aria-labelledby="trend-title">
+          <div class="panel-head">
+            <h2 id="trend-title">日別推移</h2>
+            <button id="reports-refresh">推移・DB容量を更新</button>
+          </div>
+          <div class="filterbar">
+            <select id="trend-root" aria-label="推移の対象フォルダ">
+              <option value="">すべての対象フォルダ</option>
+            </select>
+            <select id="trend-days" aria-label="推移の期間">
+              <option value="30">30日間</option>
+              <option value="90">90日間</option>
+              <option value="365">1年間</option>
+            </select>
+            <select id="trend-metric" aria-label="グラフの項目">
+              <option value="bytes">合計容量</option>
+              <option value="count">ファイル数</option>
+            </select>
+          </div>
+          <p id="report-error" class="error-banner hidden" role="alert"></p>
+          <div class="trend-chart" id="trend-chart" aria-live="polite"></div>
+          <p class="report-note">
+            日本時間の収集開始日ごとに、最後の正常な結果を表示します。未収集・一部未確認の日は0として扱いません。全体は現在の対象すべてが同じ回で正常収集できた結果です。検索・日数・表示中の子フォルダの条件は適用しません。
+          </p>
+          <details>
+            <summary>日別の容量・件数と増減を見る</summary>
+            <div class="table-wrap trend-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>日付（日本時間）</th>
+                    <th class="num">合計容量</th>
+                    <th class="num">ファイル数</th>
+                    <th class="num">容量の増減</th>
+                    <th class="num">件数の増減</th>
+                    <th>比較元 / 状態</th>
+                  </tr>
+                </thead>
+                <tbody id="trend-rows"></tbody>
+              </table>
+            </div>
+          </details>
+        </section>
+        <section class="panel" aria-labelledby="storage-title">
+          <div class="panel-head">
+            <h2 id="storage-title">管理データの容量</h2>
+            <span id="storage-records" class="muted"></span>
+          </div>
+          <div id="storage-summary" class="storage-summary"></div>
+          <p id="storage-warning" class="report-note"></p>
+          <p class="report-note">
+            収集用の一時DBは収集後・次回起動時に整理します。収集中は観測DBと同程度の追加空き容量が必要です。グラフには既存の集計履歴を使い、ファイル全件の日別コピーは保存しません。
+          </p>
+        </section>
         <section class="panel">
           <div class="panel-head">
             <h2>最近の収集</h2>
             <span class="muted" style="font-size: 11px"
-              >対象フォルダごと・直近20回</span
+              >全対象合わせて直近20件</span
             >
           </div>
           <div class="table-wrap" style="min-height: 0">
@@ -309,6 +363,7 @@
       </div>
     </div>
     <div id="toast" class="toast hidden" role="status"></div>
+    <script src="/static/reports.js" defer></script>
     <script src="/static/app.js" defer></script>
   </body>
 </html>
