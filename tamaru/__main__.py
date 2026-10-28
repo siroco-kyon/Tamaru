@@ -112,6 +112,7 @@ def main(argv=None):
     local.add_argument(
         "--no-browser", action="store_true", help="ブラウザを自動で開かない"
     )
+    sub.add_parser("collect", help="収集を1回だけ実行し、結果を保存して終了")
     init = sub.add_parser("create-admin", help="初期管理者を対話形式で登録")
     init.add_argument("username")
     init.add_argument("--display-name", default="管理者")
@@ -173,6 +174,17 @@ def main(argv=None):
         import_folderage(args.state, args.source)
         print("初回検出日時を引き継いで取り込みました。")
         return 0
+    if args.command == "collect":
+        from .jobs import Collector
+
+        collector = Collector(Inventory(args.state), Store(args.state))
+        result = collector.collect_once()
+        print("収集結果: " + result["status"])
+        if result.get("error"):
+            print(result["error"], file=sys.stderr)
+        if collector.storage_warning:
+            print(collector.storage_warning, file=sys.stderr)
+        return {"完了": 0, "一部未確認": 2}.get(result["status"], 1)
     if not 1 <= args.port <= 65535:
         parser.error("ポートは1〜65535で指定してください。")
     is_local = args.command == "local"

@@ -27,14 +27,14 @@ class Collector:
         self.storage_warning = ""
 
     def recover(self):
-        previous = self.store.get("last_job")
-        if previous and previous.get("status") == "実行中":
-            previous.update(status="中断", finished=time.time())
-            self.store.put("last_job", previous)
-            if previous.get("reason") == "daily":
-                self.store.put("daily_key", None)
         try:
             with ScanLock(self.inventory.state / "scan.lock"):
+                previous = self.store.get("last_job")
+                if previous and previous.get("status") == "実行中":
+                    previous.update(status="中断", finished=time.time())
+                    self.store.put("last_job", previous)
+                    if previous.get("reason") == "daily":
+                        self.store.put("daily_key", None)
                 self._discard_staging()
         except RuntimeError:
             self.storage_warning = (
@@ -78,36 +78,57 @@ class Collector:
                 "storage_warning": self.storage_warning,
             }
 
+    def _prepare_job(self, actor, reason, daily_key=None):
+        """Caller holds self.lock; shared by background and one-shot collection."""
+        if self.running:
+            return None
+        if not self.inventory.config()["targets"]:
+            raise ValueError("対象フォルダを設定してください。")
+        if daily_key and self.store.get("daily_key") == daily_key:
+            return None
+        job = {
+            "actor": actor,
+            "reason": reason,
+            "started": time.time(),
+            "status": "実行中",
+        }
+        self.store.put("last_job", job)
+        if daily_key:
+            self.store.put("daily_key", daily_key)
+        self.store.audit(actor, "scan_requested", reason)
+        self.running = True
+        self.error = ""
+        return job
+
+    def collect_once(self, actor="task-scheduler"):
+        """Collect synchronously without a web server or a scheduler thread."""
+        # Take the process lock before changing last_job. A rejected task must
+        # not overwrite the status of a collection running in the web process.
+        with ScanLock(self.inventory.state / "scan.lock"):
+            with self.lock:
+                job = self._prepare_job(actor, "task")
+                if job is None:
+                    raise RuntimeError("収集は既に実行中です。")
+            self._run(job, lock_held=True)
+        return job
+
     def request(self, actor, reason="manual", daily_key=None):
         with self.lock:
-            if self.running:
+            job = self._prepare_job(actor, reason, daily_key)
+            if job is None:
                 return False
-            if not self.inventory.config()["targets"]:
-                raise ValueError("対象フォルダを設定してください。")
-            if daily_key and self.store.get("daily_key") == daily_key:
-                return False
-            job = {
-                "actor": actor,
-                "reason": reason,
-                "started": time.time(),
-                "status": "実行中",
-            }
-            self.store.put("last_job", job)
-            if daily_key:
-                self.store.put("daily_key", daily_key)
-            self.store.audit(actor, "scan_requested", reason)
-            self.running = True
-            self.error = ""
             self.thread = threading.Thread(
                 target=self._run, args=(job,), name="tamaru-collector", daemon=False
             )
             self.thread.start()
             return True
 
-    def _run(self, job):
+    def _run(self, job, *, lock_held=False):
         try:
             with (
-                ScanLock(self.inventory.state / "scan.lock"),
+                contextlib.nullcontext()
+                if lock_held
+                else ScanLock(self.inventory.state / "scan.lock"),
                 contextlib.ExitStack() as cleanup,
             ):
                 cleanup.callback(self._discard_staging)
