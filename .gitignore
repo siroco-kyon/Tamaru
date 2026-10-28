@@ -22,3 +22,5 @@ dist/
 config.json
 test-results/
 scripts/prepare-ui.py
+output/playwright/
+.playwright-cli/

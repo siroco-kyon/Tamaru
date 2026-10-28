@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 import sqlite3
 import sys
+import threading
+import webbrowser
 
 from .inventory import Inventory, ScanLock, within
 from .security import Store
@@ -14,6 +16,44 @@ from .security import Store
 def default_state():
     base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
     return base / "data"
+
+
+def setup_local_admin(state):
+    Inventory(state)
+    store = Store(state)
+    if store.admins():
+        return
+    print("初回のみ、ログイン用の管理者を登録します。")
+    username = input("管理者ID（空欄は admin）: ").strip() or "admin"
+    password = getpass.getpass("パスワード（12文字以上）: ")
+    if getpass.getpass("もう一度入力: ") != password:
+        raise ValueError("パスワードが一致しません。もう一度起動してください。")
+    store.create_admin(username, "管理者", password, first_only=True)
+
+
+def run_with_browser(server, url):
+    """Open only after this server has bound its port; stop waiting on failure."""
+    stopped = threading.Event()
+
+    def open_when_ready():
+        while not server.started:
+            if stopped.wait(0.1):
+                return
+        if not stopped.is_set():
+            try:
+                webbrowser.open(url)
+            except webbrowser.Error:
+                print("ブラウザで開いてください: " + url)
+
+    opener = threading.Thread(
+        target=open_when_ready, name="tamaru-browser", daemon=True
+    )
+    opener.start()
+    try:
+        server.run()
+    finally:
+        stopped.set()
+        opener.join(timeout=2)
 
 
 def import_folderage(state, source):
@@ -55,7 +95,7 @@ def import_folderage(state, source):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Tamaru — 社内LAN向けファイル滞留状況ダッシュボード"
+        description="Tamaru — ローカル・社内LAN向けファイル滞留状況ダッシュボード"
     )
     parser.add_argument(
         "--state",
@@ -63,7 +103,15 @@ def main(argv=None):
         default=default_state(),
         help="管理データの保存先（ローカル）",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.set_defaults(command="local", port=8765, no_browser=False)
+    sub = parser.add_subparsers(dest="command")
+    local = sub.add_parser(
+        "local", help="このPCだけで起動し、ブラウザを開く（省略時の動作）"
+    )
+    local.add_argument("--port", type=int, default=8765)
+    local.add_argument(
+        "--no-browser", action="store_true", help="ブラウザを自動で開かない"
+    )
     init = sub.add_parser("create-admin", help="初期管理者を対話形式で登録")
     init.add_argument("username")
     init.add_argument("--display-name", default="管理者")
@@ -92,6 +140,9 @@ def main(argv=None):
         help="ローカル試運転専用。LAN向けHTTP接続は許可しない",
     )
     args = parser.parse_args(argv)
+    # argparse sets the subcommand destination to None when no command was supplied.
+    if args.command is None:
+        args.command = "local"
     if args.command in ("create-admin", "reset-password"):
         Inventory(args.state)  # Validate local state storage even for account commands.
         store = Store(args.state)
@@ -122,6 +173,19 @@ def main(argv=None):
         import_folderage(args.state, args.source)
         print("初回検出日時を引き継いで取り込みました。")
         return 0
+    if not 1 <= args.port <= 65535:
+        parser.error("ポートは1〜65535で指定してください。")
+    is_local = args.command == "local"
+    if is_local:
+        args.host = "127.0.0.1"
+        args.dev_http = True
+        args.allowed_host = ["127.0.0.1", "localhost"]
+        args.cert_file = args.key_file = None
+        args.trusted_proxy = None
+        setup_local_admin(args.state)
+        print(f"このPC専用: http://127.0.0.1:{args.port}/")
+        print(f"管理データ: {args.state.absolute()}")
+        print("終了するには、このウィンドウで Ctrl+C を押してください。")
     if args.dev_http and args.host not in ("127.0.0.1", "localhost", "::1"):
         parser.error("--dev-httpはループバックでの試運転専用です。")
     if bool(args.cert_file) != bool(args.key_file):
@@ -140,8 +204,7 @@ def main(argv=None):
     app = create_app(
         args.state, allowed_hosts=args.allowed_host, dev_http=args.dev_http
     )
-    uvicorn.run(
-        app,
+    options = dict(
         host=args.host,
         port=args.port,
         workers=1,
@@ -158,6 +221,11 @@ def main(argv=None):
         limit_concurrency=64,
         h11_max_incomplete_event_size=65536,
     )
+    if is_local and not args.no_browser:
+        server = uvicorn.Server(uvicorn.Config(app, **options))
+        run_with_browser(server, f"http://127.0.0.1:{args.port}/")
+    else:
+        uvicorn.run(app, **options)
     return 0
 
 

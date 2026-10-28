@@ -1,4 +1,4 @@
-"""FolderAge: metadata-only folder inventory. Never modifies watched files."""
+"""Metadata-only folder inventory. Never modifies watched files."""
 
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ import sys
 import threading
 import time
 
-VERSION = "0.1.0"
+from . import __version__
+
 DAY = 86400
 BASE = (
     Path(sys.executable).resolve().parent
@@ -440,6 +441,7 @@ class Inventory:
     def summary(self):
         now = time.time()
         with contextlib.closing(self.connect()) as db:
+            db.execute("BEGIN")
             roots = self.selected_roots(db)
             clause, args = self.where(db, {}, now)
             totals = dict(
@@ -467,7 +469,7 @@ class Inventory:
         with self.progress_lock:
             progress = self.progress.copy()
         return {
-            "version": VERSION,
+            "version": __version__,
             "totals": totals,
             "roots": [dict(r) for r in roots],
             "runs": recent,
@@ -483,6 +485,7 @@ class Inventory:
         limit = max(10, min(200, int(params.get("limit", "100"))))
         mode = params.get("mode", "files")
         with contextlib.closing(self.connect()) as db:
+            db.execute("BEGIN")
             clause, args = self.where(db, params, now)
             if mode == "folders":
                 count = db.execute(
@@ -534,6 +537,139 @@ class Inventory:
             "page": page,
             "limit": limit,
             "mode": mode,
+        }
+
+    def browse(self, params, now=None):
+        """List one directory level using stored metadata, with subtree totals."""
+        now = time.time() if now is None else now
+        page = max(1, min(10000000, int(params.get("page", "1"))))
+        limit = max(10, min(200, int(params.get("limit", "100"))))
+        root_id = int(params["root"]) if params.get("root") else None
+        folder = params.get("folder", "")
+        breadcrumbs = []
+        with contextlib.closing(self.connect()) as db:
+            db.execute("BEGIN")
+            roots = self.selected_roots(db)
+            root = next((r for r in roots if r["id"] == root_id), None)
+            if root_id is not None and root is None:
+                raise ValueError(
+                    "対象フォルダが見つかりません。表示を更新してください。"
+                )
+            if folder and root is None:
+                raise ValueError("対象フォルダを指定してください。")
+            if root:
+                folder = os.path.normpath(folder or root["path"])
+                if not os.path.isabs(folder) or not within(folder, root["path"]):
+                    raise ValueError("対象フォルダの範囲外です。")
+                # Use the configured root's spelling for case-insensitive Windows paths.
+                relative = os.path.relpath(folder, root["path"])
+                folder = os.path.join(root["path"], relative)
+                folder = os.path.normpath(folder)
+                current = root["path"]
+                breadcrumbs.append(
+                    {"name": os.path.basename(current) or current, "path": current}
+                )
+                if relative != ".":
+                    for part in relative.split(os.sep):
+                        current = os.path.join(current, part)
+                        breadcrumbs.append({"name": part, "path": current})
+            scoped = {**params, "folder": folder, "recursive": "1"}
+            clause, args = self.where(db, scoped, now)
+            metrics = """count(*) AS count,sum(f.size) AS bytes,
+                min(f.first_seen) AS first_seen,max(f.last_seen) AS last_seen,
+                sum(CASE WHEN f.seen_run<>r.latest_run OR r.status NOT IN ('完了','一部未確認') THEN 1 ELSE 0 END) AS uncertain"""
+            if root is None:
+                folders = [
+                    {
+                        **dict(row),
+                        "kind": "folder",
+                        "name": os.path.basename(row["path"]) or row["path"],
+                    }
+                    for row in db.execute(
+                        f"""SELECT f.root_id,r.path,{metrics}
+                        FROM files f JOIN roots r ON r.id=f.root_id
+                        WHERE {clause} GROUP BY f.root_id""",
+                        args,
+                    )
+                ]
+                direct = None
+            else:
+                prefix = folder.rstrip(os.sep) + os.sep
+                # Native SQLite string operations avoid a Python callback per file.
+                groups = list(
+                    db.execute(
+                        f"""SELECT CASE WHEN f.parent=? THEN '' ELSE
+                        substr(substr(f.path,?),1,instr(substr(f.path,?),?)-1) END AS child,
+                        {metrics}
+                        FROM files f JOIN roots r ON r.id=f.root_id
+                        WHERE {clause} GROUP BY child""",
+                        [folder, len(prefix) + 1, len(prefix) + 1, os.sep, *args],
+                    )
+                )
+                direct = next((row for row in groups if row["child"] == ""), None)
+                folders = [
+                    {
+                        **dict(row),
+                        "kind": "folder",
+                        "root_id": root_id,
+                        "path": os.path.join(folder, row["child"]),
+                        "name": row["child"],
+                    }
+                    for row in groups
+                    if row["child"]
+                ]
+            sort = params.get("sort", "size")
+            folders.sort(
+                key=lambda row: (
+                    -row["bytes"]
+                    if sort == "size"
+                    else row["first_seen"]
+                    if sort == "age"
+                    else path_key(row["path"]),
+                    path_key(row["path"]),
+                )
+            )
+            direct_count = direct["count"] if direct else 0
+            count = len(folders) + direct_count
+            totals = {
+                "count": sum(row["count"] for row in folders) + direct_count,
+                "bytes": sum(row["bytes"] for row in folders)
+                + (direct["bytes"] if direct else 0),
+                "uncertain": sum(row["uncertain"] for row in folders)
+                + (direct["uncertain"] if direct else 0),
+            }
+            start = (page - 1) * limit
+            rows = folders[start : start + limit]
+            if direct_count and len(rows) < limit:
+                order = {
+                    "size": "f.size DESC,f.path",
+                    "age": "f.first_seen,f.path",
+                }.get(sort, "f.path")
+                rows.extend(
+                    {**dict(row), "kind": "file", "count": 1, "bytes": row["size"]}
+                    for row in db.execute(
+                        f"""SELECT f.*,CASE WHEN f.seen_run=r.latest_run AND r.status IN ('完了','一部未確認') THEN 0 ELSE 1 END AS uncertain
+                        FROM files f JOIN roots r ON r.id=f.root_id
+                        WHERE {clause} AND f.parent=? ORDER BY {order} LIMIT ? OFFSET ?""",
+                        [
+                            *args,
+                            folder,
+                            limit - len(rows),
+                            max(0, start - len(folders)),
+                        ],
+                    )
+                )
+        for row in rows:
+            row["age"] = max(0, int((now - row["first_seen"]) / DAY))
+        return {
+            "rows": rows,
+            "count": count,
+            "page": page,
+            "limit": limit,
+            "root_id": root_id,
+            "folder": folder,
+            "breadcrumbs": breadcrumbs,
+            "totals": totals,
         }
 
     def csv_chunks(self, params):
