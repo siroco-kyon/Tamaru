@@ -10,6 +10,7 @@ let view = "browse",
   folder = "",
   requestId = 0,
   lastSignature = "",
+  lastReportSignature = "",
   hadScan = false,
   busy = false,
   refreshing = false,
@@ -241,6 +242,13 @@ async function refresh() {
       (j ? date(j.started) + " · " + j.status + " · " + j.actor : "未実行");
     $("freshness").textContent = busy ? "前回の結果を表示しています" : "";
     const old = $("root").value;
+    const trendRoot = document.getElementById("trend-root");
+    if (
+      trendRoot.value &&
+      !d.roots.some((r) => String(r.id) === trendRoot.value)
+    ) {
+      trendRoot.value = "";
+    }
     const rootHTML =
       '<option value="">すべての対象フォルダ</option>' +
       d.roots
@@ -284,6 +292,9 @@ async function refresh() {
     ]);
     if (signature !== lastSignature) {
       if (await list()) lastSignature = signature;
+    }
+    if (signature !== lastReportSignature) {
+      if (await refreshReports()) lastReportSignature = signature;
     }
   } catch (e) {
     error(e);

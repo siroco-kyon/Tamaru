@@ -7,7 +7,7 @@ import datetime as dt
 import threading
 import time
 from zoneinfo import ZoneInfo
-from .inventory import Inventory, ScanLock
+from .inventory import Inventory, ScanLock, is_link
 
 
 DEFAULT_SCHEDULE = {"enabled": True, "time": "02:00", "timezone": "Asia/Tokyo"}
@@ -24,6 +24,7 @@ class Collector:
         self.stop = threading.Event()
         self.error = ""
         self.scheduler = None
+        self.storage_warning = ""
 
     def recover(self):
         previous = self.store.get("last_job")
@@ -32,6 +33,31 @@ class Collector:
             self.store.put("last_job", previous)
             if previous.get("reason") == "daily":
                 self.store.put("daily_key", None)
+        try:
+            with ScanLock(self.inventory.state / "scan.lock"):
+                self._discard_staging()
+        except RuntimeError:
+            self.storage_warning = (
+                "別の収集が実行中のため、一時DBの整理を保留しました。"
+            )
+
+    def _discard_staging(self):
+        """Remove only our disposable database, after all its connections close."""
+        folder = self.inventory.state / "staging"
+        self.storage_warning = ""
+        try:
+            if not folder.exists():
+                return
+            if (
+                is_link(folder.lstat())
+                or folder.resolve().parent != self.inventory.state.resolve()
+            ):
+                raise ValueError("一時DBの保存先が通常のフォルダではありません。")
+            with ScanLock(folder / "scan.lock"):
+                for suffix in ("-wal", "-shm", "-journal", ""):
+                    (folder / ("inventory.sqlite3" + suffix)).unlink(missing_ok=True)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.storage_warning = "一時DBの整理を保留しました: " + str(exc)
 
     def status(self):
         with self.lock:
@@ -49,6 +75,7 @@ class Collector:
                 else (self.error or "待機中"),
                 "last_job": self.store.get("last_job"),
                 "schedule": self.store.get("schedule", DEFAULT_SCHEDULE),
+                "storage_warning": self.storage_warning,
             }
 
     def request(self, actor, reason="manual", daily_key=None):
@@ -79,8 +106,19 @@ class Collector:
 
     def _run(self, job):
         try:
-            with ScanLock(self.inventory.state / "scan.lock"):
-                staging = Inventory(self.inventory.state / "staging")
+            with (
+                ScanLock(self.inventory.state / "scan.lock"),
+                contextlib.ExitStack() as cleanup,
+            ):
+                cleanup.callback(self._discard_staging)
+                staging_path = self.inventory.state / "staging"
+                staging_path.mkdir(exist_ok=True)
+                if (
+                    is_link(staging_path.lstat())
+                    or staging_path.resolve().parent != self.inventory.state.resolve()
+                ):
+                    raise ValueError("一時DBの保存先が通常のフォルダではありません。")
+                staging = Inventory(staging_path)
                 with (
                     contextlib.closing(self.inventory.connect()) as source,
                     contextlib.closing(staging.connect()) as dest,

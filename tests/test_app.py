@@ -69,6 +69,8 @@ def test_all_private_apis_require_login(setup):
         "/api/summary",
         "/api/list",
         "/api/browse",
+        "/api/trends",
+        "/api/storage",
         "/api/config",
         "/api/admins",
         "/api/audit",
@@ -529,3 +531,21 @@ def test_listing_keeps_one_snapshot_during_publication(tmp_path, monkeypatch):
     result = inventory.listing({})
     assert changed and result["count"] == len(result["rows"]) == 1
     assert inventory.listing({})["count"] == 2
+
+
+def test_trends_and_storage_api_after_scan(setup):
+    app, client, target, state = setup
+    (target / "a.txt").write_bytes(b"abc")
+    headers = login(client)
+    configure(client, target, headers)
+    scan(app, client, headers)
+    data = client.get("/api/trends?days=30").json()
+    assert len(data["rows"]) == 30 and data["timezone"] == "Asia/Tokyo"
+    assert sum(row["bytes"] is not None for row in data["rows"]) == 1
+    assert data["rows"][-1]["bytes"] == 3
+    storage = client.get("/api/storage").json()
+    assert storage["file_records"] == 1 and storage["staging_bytes"] == 0
+    assert storage["database_bytes"] > 0 and not storage["warning"]
+    assert client.get("/api/trends?days=367").status_code == 400
+    assert client.get("/api/trends?days=no").status_code == 422
+    assert client.get("/api/trends?root=999").status_code == 400
