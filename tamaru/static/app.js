@@ -4,7 +4,7 @@ let csrf = "",
   resetId = null;
 const $ = (id) => document.getElementById(id);
 let recursiveFolder = false;
-let view = "files",
+let view = "browse",
   page = 1,
   totalPages = 1,
   folder = "",
@@ -12,9 +12,12 @@ let view = "files",
   lastSignature = "",
   hadScan = false,
   busy = false,
-  refreshing = false;
+  refreshing = false,
+  trail = [],
+  settingsTimezone = "Asia/Tokyo";
 const nf = new Intl.NumberFormat("ja-JP");
 const fmt = (n) => nf.format(n ?? 0);
+const pathName = (path) => path.split(/[\\/]/).filter(Boolean).pop() || path;
 const esc = (s) =>
   String(s ?? "").replace(
     /[&<>"']/g,
@@ -78,14 +81,64 @@ function params() {
     age: $("age").value,
     sort: $("sort").value,
     folder,
-    depth: $("depth").value,
     recursive: recursiveFolder ? "1" : "0",
   });
 }
+function navigate(rootId = "", path = "") {
+  $("root").value = String(rootId);
+  folder = path;
+  recursiveFolder = true;
+  view = "browse";
+  page = 1;
+  updateTabs();
+  list().catch(error);
+}
+function updateTabs() {
+  $("files-tab").classList.toggle("active", view === "files");
+  $("folders-tab").classList.toggle("active", view === "browse");
+}
+function breadcrumbs(rootId) {
+  const nav = $("breadcrumb");
+  nav.replaceChildren();
+  const add = (label, action, current = false) => {
+    if (nav.childElementCount) {
+      const separator = document.createElement("span");
+      separator.textContent = "/";
+      separator.setAttribute("aria-hidden", "true");
+      nav.appendChild(separator);
+    }
+    const button = document.createElement("button");
+    button.textContent = label;
+    button.onclick = action;
+    if (current) button.setAttribute("aria-current", "page");
+    nav.appendChild(button);
+  };
+  add(
+    "すべての対象フォルダ",
+    () => navigate(),
+    view === "browse" && !trail.length,
+  );
+  trail.forEach((part, index) =>
+    add(
+      part.name,
+      () => navigate(rootId, part.path),
+      view === "browse" && index === trail.length - 1,
+    ),
+  );
+  if (view === "files") add("ファイル一覧", () => {}, true);
+}
 async function list() {
   const id = ++requestId;
-  const d = await api("/api/list?" + params());
-  if (id !== requestId) return;
+  let d;
+  try {
+    d = await api(
+      (view === "browse" ? "/api/browse?" : "/api/list?") + params(),
+    );
+  } catch (e) {
+    lastSignature = "";
+    throw e;
+  }
+  if (id !== requestId) return false;
   totalPages = Math.max(1, Math.ceil(d.count / d.limit));
   if (page > totalPages) {
     page = totalPages;
@@ -99,16 +152,12 @@ async function list() {
   $("thead").innerHTML =
     view === "files"
       ? '<tr><th>ファイル名 / フォルダ</th><th class="num">容量</th><th class="num">滞留日数</th><th>初回検出</th><th>最終確認 / 状態</th></tr>'
-      : '<tr><th>フォルダ（直下のファイル）</th><th class="num">ファイル数</th><th class="num">合計容量</th><th class="num">最長滞留日数</th><th class="num">未確認</th></tr>';
-  if (view === "folders" && d.recursive) {
-    $("thead").querySelector("th").textContent =
-      `フォルダ（${$("depth").value}階層目・配下を含む）`;
-  }
+      : '<tr><th>名前</th><th class="num">容量</th><th class="num">ファイル数</th><th class="num">最長滞留日数</th><th>最終確認 / 状態</th></tr>';
   $("tbody").innerHTML = d.rows
     .map((r, i) =>
       view === "files"
         ? `<tr><td><div class="filename">${esc(r.name)}</div><div class="path" title="${esc(r.path)}">${esc(r.parent)}</div></td><td class="num" title="${fmt(r.size)} bytes">${bytes(r.size)}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td style="white-space:nowrap">${date(r.first_seen)}</td><td><div style="white-space:nowrap">${date(r.last_seen)}</div><span class="state ${r.status === "未確認" ? "unknown" : ""}">${esc(r.status)}</span></td></tr>`
-        : `<tr><td><button class="folder-button" data-row="${i}">${esc(r.parent)}</button></td><td class="num">${fmt(r.count)}件</td><td class="num">${bytes(r.bytes)}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td class="num">${fmt(r.uncertain)}件</td></tr>`,
+        : `<tr><td><div class="entry-name"><span class="entry-icon" aria-hidden="true">${r.kind === "folder" ? "📁" : "📄"}</span><div>${r.kind === "folder" ? `<button class="folder-button" data-row="${i}" title="${esc(r.path)}">${esc(r.name)}</button><div class="entry-detail">配下を含む${!d.root_id ? " · " + esc(r.path) : ""}</div>` : `<div class="filename" title="${esc(r.path)}">${esc(r.name)}</div><div class="entry-detail">このフォルダ直下のファイル</div>`}</div></div></td><td class="num">${bytes(r.bytes)}</td><td class="num">${r.kind === "folder" ? fmt(r.count) + "件" : "—"}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td>${date(r.last_seen)}<br><span class="state ${r.uncertain ? "unknown" : ""}">${r.uncertain ? "未確認 " + fmt(r.uncertain) + "件" : "確認済み"}</span></td></tr>`,
     )
     .join("");
   $("tbody")
@@ -117,10 +166,7 @@ async function list() {
       (b) =>
         (b.onclick = () => {
           const r = d.rows[Number(b.dataset.row)];
-          folder = r.parent;
-          recursiveFolder = !!d.recursive;
-          $("root").value = String(r.root_id);
-          setView("files", false);
+          navigate(r.root_id, r.path);
         }),
     );
   $("empty").classList.toggle("hidden", d.count !== 0);
@@ -132,19 +178,34 @@ async function list() {
       ? "検索条件を変えるか、収集結果を確認してください。"
       : "対象フォルダを設定し、「今すぐ収集」を押してください。";
   }
-  $("breadcrumb").style.display = folder ? "block" : "none";
-  $("breadcrumb").textContent = folder ? "絞り込み中: " + folder : "";
-  if (folder) {
-    const b = document.createElement("button");
-    b.textContent = "解除";
-    b.onclick = () => {
-      folder = "";
-      recursiveFolder = false;
-      page = 1;
-      list().catch(error);
-    };
-    $("breadcrumb").appendChild(b);
+  if (view === "browse") {
+    trail = d.breadcrumbs;
+    folder = d.folder;
+    recursiveFolder = true;
+    $("location-title").textContent = trail.length
+      ? trail[trail.length - 1].name
+      : "対象フォルダ";
+    $("location-path").textContent =
+      folder || "登録した対象フォルダごとの配下合計";
+    $("location-summary").textContent =
+      `配下 ${fmt(d.totals.count)}ファイル · ${bytes(d.totals.bytes)}${d.totals.uncertain ? " · 未確認 " + fmt(d.totals.uncertain) + "件" : ""}（現在の検索・日数条件）`;
+  } else {
+    $("location-title").textContent = "ファイル一覧";
+    $("location-path").textContent =
+      folder ||
+      ($("root").value
+        ? $("root").selectedOptions[0].textContent
+        : "すべての対象フォルダ");
+    $("location-summary").textContent =
+      `${fmt(d.count)}ファイル · 配下の階層をまとめて表示`;
   }
+  $("subtree-files").classList.toggle(
+    "hidden",
+    view !== "browse" || !d.root_id,
+  );
+  breadcrumbs(view === "browse" ? d.root_id : $("root").value);
+  $("error").classList.add("hidden");
+  return true;
 }
 async function refresh() {
   if (refreshing) return;
@@ -183,12 +244,22 @@ async function refresh() {
     const rootHTML =
       '<option value="">すべての対象フォルダ</option>' +
       d.roots
-        .map((r) => `<option value="${r.id}">${esc(r.path)}</option>`)
+        .map((r) => {
+          const name = pathName(r.path);
+          const duplicate = d.roots.some(
+            (other) => other.id !== r.id && pathName(other.path) === name,
+          );
+          return `<option value="${r.id}" title="${esc(r.path)}">${esc(duplicate ? r.path : name)}</option>`;
+        })
         .join("");
     if ($("root").innerHTML !== rootHTML) {
       $("root").innerHTML = rootHTML;
       $("root").value = old;
-      if (!$("root").value) $("root").value = "";
+      if (!$("root").value) {
+        $("root").value = "";
+        folder = "";
+        trail = [];
+      }
     }
     $("runs").innerHTML =
       d.runs
@@ -212,8 +283,7 @@ async function refresh() {
       busy,
     ]);
     if (signature !== lastSignature) {
-      lastSignature = signature;
-      await list();
+      if (await list()) lastSignature = signature;
     }
   } catch (e) {
     error(e);
@@ -221,20 +291,25 @@ async function refresh() {
     refreshing = false;
   }
 }
-function setView(mode, clear = true) {
+function setView(mode) {
   view = mode;
   page = 1;
-  if (clear) {
-    folder = "";
-    recursiveFolder = false;
-  }
-  $("files-tab").classList.toggle("active", mode === "files");
-  $("folders-tab").classList.toggle("active", mode === "folders");
-  $("depth").classList.toggle("hidden", mode !== "folders");
+  folder = "";
+  trail = [];
+  $("root").value = "";
+  recursiveFolder = true;
+  updateTabs();
   list().catch(error);
 }
 $("files-tab").onclick = () => setView("files");
-$("folders-tab").onclick = () => setView("folders");
+$("folders-tab").onclick = () => setView("browse");
+$("subtree-files").onclick = () => {
+  view = "files";
+  page = 1;
+  recursiveFolder = true;
+  updateTabs();
+  list().catch(error);
+};
 let searchTimer;
 $("search").oninput = () => {
   clearTimeout(searchTimer);
@@ -243,12 +318,13 @@ $("search").oninput = () => {
     list().catch(error);
   }, 250);
 };
-["root", "age", "sort", "depth"].forEach(
+["root", "age", "sort"].forEach(
   (id) =>
     ($(id).onchange = () => {
       if (id === "root") {
         folder = "";
-        recursiveFolder = false;
+        trail = [];
+        recursiveFolder = true;
       }
       page = 1;
       list().catch(error);
@@ -268,6 +344,8 @@ $("settings").onclick = async () => {
     $("targets").value = c.targets.join("\n");
     $("daily-enabled").checked = c.enabled;
     $("daily-time").value = c.time;
+    settingsTimezone = c.timezone;
+    $("schedule-timezone").textContent = c.timezone;
     $("modal-error").textContent = "";
     $("modal").classList.remove("hidden");
     $("targets").focus();
@@ -289,10 +367,12 @@ $("save").onclick = async () => {
       targets: $("targets").value.split(/\r?\n/),
       enabled: $("daily-enabled").checked,
       time: $("daily-time").value,
-      timezone: "Asia/Tokyo",
+      timezone: settingsTimezone,
     });
     $("modal").classList.add("hidden");
     folder = "";
+    trail = [];
+    $("root").value = "";
     page = 1;
     lastSignature = "";
     await refresh();
@@ -461,7 +541,6 @@ async function init() {
     me = await api("/api/me");
     csrf = me.csrf;
     $("current-user").textContent = me.display_name;
-    $("depth").classList.add("hidden");
     await refresh();
   } catch (e) {
     error(e);

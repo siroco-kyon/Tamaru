@@ -22,7 +22,7 @@
           受け渡しフォルダにある<br />ファイルの量と経過日数を<br />ひとつの画面で確認。
         </div>
         <div class="side-bottom">
-          READ ONLY · v0.1.1<br />ファイルの中身は読みません。<br />削除・移動は行いません。
+          READ ONLY<br />ファイルの中身は読みません。<br />削除・移動は行いません。
         </div>
       </aside>
       <main>
@@ -80,7 +80,7 @@
         </section>
         <section class="panel">
           <div class="panel-head">
-            <h2>ファイル一覧</h2>
+            <h2>フォルダとファイル</h2>
             <span id="freshness" class="muted"></span>
             <div class="status-line" aria-live="polite">
               <span class="dot" id="status-dot"></span
@@ -90,8 +90,8 @@
           <div class="scan-path hidden" id="scan-path"></div>
           <div class="filterbar">
             <div class="tabs" aria-label="表示単位">
-              <button class="active" id="files-tab">ファイル別</button
-              ><button id="folders-tab">フォルダ別</button>
+              <button class="active" id="folders-tab">フォルダをたどる</button
+              ><button id="files-tab">全ファイル一覧</button>
             </div>
             <input
               id="search"
@@ -107,18 +107,27 @@
               <option value="30">30日以上</option>
               <option value="60">60日以上</option>
               <option value="90">90日以上</option></select
-            ><select id="depth" aria-label="集計する階層">
-              <option value="0">各フォルダ直下</option>
-              <option value="1">1階層目ごと（配下含む）</option>
-              <option value="2">2階層目ごと（配下含む）</option>
-              <option value="3">3階層目ごと（配下含む）</option></select
             ><select id="sort" aria-label="並べ替え">
-              <option value="age">滞留日数が長い順</option>
               <option value="size">容量が大きい順</option>
+              <option value="age">滞留日数が長い順</option>
               <option value="path">パス順</option></select
             ><button id="export">CSV出力</button>
           </div>
-          <div class="breadcrumb" id="breadcrumb"></div>
+          <nav
+            class="breadcrumb"
+            id="breadcrumb"
+            aria-label="現在のフォルダ"
+          ></nav>
+          <div class="folder-context">
+            <div>
+              <h3 id="location-title">対象フォルダ</h3>
+              <div id="location-path" class="muted"></div>
+              <p id="location-summary" class="muted" aria-live="polite"></p>
+            </div>
+            <button id="subtree-files" class="hidden">
+              この配下の全ファイル
+            </button>
+          </div>
           <div class="table-wrap">
             <table>
               <thead id="thead"></thead>
@@ -166,7 +175,7 @@
           </details>
         </section>
         <p class="bottom-note">
-          フォルダ別は「直下」または「指定階層の配下を含む集計」を選べます。全体集計にはすべての階層を含みます。<br />「未確認」は今回の収集で状態を確定できない記録です。日数は経過時間24時間ごとに加算します。画面上の日時は閲覧PCのタイムゾーンです。
+          フォルダをクリックすると、子フォルダと直下のファイルを表示します。フォルダの容量・件数は配下全体の合計です。検索・日数の条件を指定した場合は、該当するファイルだけを集計します。空フォルダは表示しません。<br />「全ファイル一覧」では階層をまたいで容量順などに並べられます。「未確認」は今回の収集で状態を確定できない記録です。画面上の日時は閲覧PCのタイムゾーンです。
         </p>
         <div class="pager" style="padding: 12px 0; border: 0">
           <span id="data-location"></span
@@ -201,6 +210,7 @@
           <label style="margin: 0"
             ><input id="daily-enabled" type="checkbox" /> 有効にする</label
           ><input id="daily-time" type="time" value="02:00" /><span
+            id="schedule-timezone"
             >日本時間</span
           >
         </div>

@@ -265,6 +265,7 @@ def create_app(
             page = int(params.get("page", "1"))
             limit = int(params.get("limit", "100"))
             with contextlib.closing(inventory.connect()) as db:
+                db.execute("BEGIN")
 
                 def grouping(path, root):
                     parent = os.path.dirname(path)
@@ -312,6 +313,10 @@ def create_app(
                 "recursive": True,
             }
         return inventory.listing(params)
+
+    @app.get("/api/browse")
+    def browse(request: Request, user=Depends(admin)):
+        return inventory.browse(safe_params(request))
 
     @app.get("/api/export")
     def export(request: Request, user=Depends(admin)):

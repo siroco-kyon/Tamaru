@@ -68,6 +68,7 @@ def test_all_private_apis_require_login(setup):
         "/api/me",
         "/api/summary",
         "/api/list",
+        "/api/browse",
         "/api/config",
         "/api/admins",
         "/api/audit",
@@ -384,3 +385,147 @@ def test_two_servers_cannot_use_same_state(setup):
     with pytest.raises(RuntimeError):
         with TestClient(duplicate):
             pass
+
+
+def test_browse_roots_children_files_breadcrumbs_and_csv(setup):
+    app, client, target, state = setup
+    for name, size in (
+        ("root.txt", 2),
+        ("営業/田中/a.txt", 7),
+        ("営業/b.txt", 3),
+        ("管理/c.txt", 5),
+    ):
+        path = target / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * size)
+    (target / "empty").mkdir()
+    headers = login(client)
+    configure(client, target, headers)
+    scan(app, client, headers)
+    overview = client.get("/api/browse").json()
+    assert overview["totals"] == {"count": 4, "bytes": 17, "uncertain": 0}
+    assert len(overview["rows"]) == 1
+    root_id = overview["rows"][0]["root_id"]
+    top = client.get("/api/browse", params={"root": root_id, "sort": "size"}).json()
+    assert [(r["name"], r["kind"], r["bytes"]) for r in top["rows"]] == [
+        ("営業", "folder", 10),
+        ("管理", "folder", 5),
+        ("root.txt", "file", 2),
+    ]
+    sales = client.get(
+        "/api/browse", params={"root": root_id, "folder": str(target / "営業")}
+    ).json()
+    assert [(r["name"], r["count"]) for r in sales["rows"]] == [
+        ("田中", 1),
+        ("b.txt", 1),
+    ]
+    assert [r["name"] for r in sales["breadcrumbs"]] == ["share", "営業"]
+    assert sales["totals"]["bytes"] == 10
+    person = client.get(
+        "/api/browse", params={"root": root_id, "folder": str(target / "営業" / "田中")}
+    ).json()
+    assert [r["name"] for r in person["rows"]] == ["a.txt"]
+    assert [r["name"] for r in person["breadcrumbs"]] == ["share", "営業", "田中"]
+    csv = client.get(
+        "/api/export",
+        params={"root": root_id, "folder": sales["folder"], "recursive": "1"},
+    ).text
+    assert "a.txt" in csv and "b.txt" in csv
+    assert "c.txt" not in csv and "root.txt" not in csv
+    flat = client.get("/api/list", params={"sort": "size"}).json()
+    assert [r["size"] for r in flat["rows"]] == [7, 5, 3, 2]
+
+
+def test_browse_filters_pagination_and_uncertain_files(setup):
+    app, client, target, state = setup
+    for i in range(12):
+        (target / f"file{i:02}.txt").write_bytes(b"x" * (i + 1))
+    nested = target / "folder" / "nested"
+    nested.mkdir(parents=True)
+    (nested / "match.txt").write_bytes(b"found")
+    headers = login(client)
+    configure(client, target, headers)
+    scan(app, client, headers)
+    root_id = client.get("/api/browse").json()["rows"][0]["root_id"]
+    first = client.get(
+        "/api/browse", params={"root": root_id, "limit": 10, "sort": "size"}
+    ).json()
+    second = client.get(
+        "/api/browse", params={"root": root_id, "limit": 10, "sort": "size", "page": 2}
+    ).json()
+    assert first["count"] == second["count"] == 13
+    assert len(first["rows"]) == 10 and len(second["rows"]) == 3
+    combined = first["rows"] + second["rows"]
+    assert combined[0]["kind"] == "folder"
+    assert [r["bytes"] for r in combined[1:]] == list(range(12, 0, -1))
+    assert first["totals"]["count"] == 13
+    filtered = client.get("/api/browse", params={"root": root_id, "q": "match"}).json()
+    assert filtered["rows"][0]["name"] == "folder" and filtered["totals"]["count"] == 1
+    assert client.get("/api/browse?age=30").json()["rows"] == []
+    moved = target.with_name("offline")
+    target.rename(moved)
+    try:
+        scan(app, client, headers)
+        uncertain = client.get("/api/browse", params={"root": root_id}).json()
+        assert uncertain["totals"]["uncertain"] == 13
+        assert all(r["uncertain"] >= 1 for r in uncertain["rows"])
+    finally:
+        moved.rename(target)
+
+
+def test_browse_multiple_roots_and_scope_validation(setup, tmp_path):
+    app, client, target, state = setup
+    other = tmp_path / "other"
+    other.mkdir()
+    (target / "a.txt").touch()
+    (other / "b.txt").touch()
+    headers = login(client)
+    configure(client, target, headers, targets=[str(target), str(other)])
+    scan(app, client, headers)
+    roots = client.get("/api/browse").json()["rows"]
+    assert {r["path"] for r in roots} == {str(target), str(other)}
+    root_id = next(r["root_id"] for r in roots if r["path"] == str(target))
+    for params in (
+        {"root": 99999},
+        {"folder": str(target)},
+        {"root": root_id, "folder": str(other)},
+        {"root": root_id, "folder": str(target / ".." / "other")},
+    ):
+        assert client.get("/api/browse", params=params).status_code == 400
+    configure(client, target, headers)
+    assert len(client.get("/api/browse").json()["rows"]) == 1
+
+
+def test_listing_keeps_one_snapshot_during_publication(tmp_path, monkeypatch):
+    import contextlib
+    import sqlite3
+
+    target = tmp_path / "share"
+    target.mkdir()
+    (target / "a.txt").touch()
+    inventory = Inventory(tmp_path / "state")
+    inventory.save_targets([str(target)])
+    inventory.scan()
+    connect = inventory.connect
+    changed = []
+
+    class PublishingConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            cursor = super().execute(sql, parameters)
+            if sql.startswith("SELECT count(*) FROM files") and not changed:
+                with contextlib.closing(connect()) as writer:
+                    writer.execute("""INSERT INTO files SELECT root_id,key || '-new',path || '-new',
+                        relative_path || '-new',parent,name || '-new',size,mtime_ns,first_seen,last_seen,seen_run,present FROM files""")
+                    writer.commit()
+                changed.append(True)
+            return cursor
+
+    def publishing_connect():
+        db = sqlite3.connect(inventory.db_path, factory=PublishingConnection)
+        db.row_factory = sqlite3.Row
+        return db
+
+    monkeypatch.setattr(inventory, "connect", publishing_connect)
+    result = inventory.listing({})
+    assert changed and result["count"] == len(result["rows"]) == 1
+    assert inventory.listing({})["count"] == 2

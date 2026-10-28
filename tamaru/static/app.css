@@ -372,14 +372,57 @@ tr:hover td {
 }
 .breadcrumb {
   padding: 0 22px 12px;
-  display: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   overflow-wrap: anywhere;
   font-size: 12px;
 }
 .breadcrumb button {
   font-size: 11px;
   padding: 2px 8px;
-  margin-left: 8px;
+}
+.breadcrumb [aria-current="page"] {
+  font-weight: 700;
+  color: var(--ink);
+}
+.folder-context {
+  padding: 14px 22px 18px;
+  background: #f4f8f4;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.folder-context h3 {
+  margin: 0 0 3px;
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+.folder-context .muted {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+#location-summary {
+  margin: 6px 0 0;
+}
+.entry-name {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 210px;
+}
+.entry-icon {
+  flex-shrink: 0;
+  font-size: 18px;
+  line-height: 1.4;
+}
+.entry-detail {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 3px;
 }
 .run-table td {
   padding-top: 9px;
@@ -580,6 +623,13 @@ textarea:focus-visible {
   .panel-head {
     padding: 15px;
   }
+  .table-wrap table {
+    min-width: 720px;
+  }
+  .folder-context {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
 .admin-row {
@@ -603,9 +653,6 @@ textarea:focus-visible {
 }
 #schedule-status {
   margin-top: -12px;
-}
-#depth {
-  max-width: 210px;
 }
 #current-user {
   font-size: 12px;
