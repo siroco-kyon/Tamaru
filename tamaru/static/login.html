@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Tamaru | ログイン</title>
+    <link rel="stylesheet" href="/static/app.css" />
+    <script src="/static/login.js" defer></script>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <main style="min-height: 100vh; display: grid; place-items: center">
+      <section
+        class="panel"
+        style="width: 440px; max-width: 100%; padding: 35px"
+      >
+        <div class="eyebrow">SHARED FOLDER INSIGHTS</div>
+        <h1>
+          Tamaru <span style="font-size: 16px; font-weight: 400">たまる</span>
+        </h1>
+        <p class="subtitle">受け渡しフォルダの滞留状況を確認</p>
+        <form
+          id="login-form"
+          style="display: grid; gap: 12px; margin-top: 28px"
+        >
+          <label for="username">管理者ID</label
+          ><input
+            id="username"
+            required
+            autocomplete="username"
+            maxlength="64"
+          /><label for="password">パスワード</label
+          ><input
+            id="password"
+            required
+            type="password"
+            autocomplete="current-password"
+            maxlength="256"
+          /><button
+            class="primary"
+            id="submit"
+            type="submit"
+            style="margin-top: 10px"
+          >
+            ログイン
+          </button>
+        </form>
+        <p
+          id="login-error"
+          role="alert"
+          style="color: #9b3820; white-space: pre-wrap"
+        ></p>
+        <p class="bottom-note">
+          社内LAN・管理者専用<br />ファイルの削除・移動・内容の読み取りは行いません。
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='10' fill='%23183c32'/%3E%3Ctext x='14' y='34' fill='white' font-family='sans-serif' font-size='30'%3EF%3C/text%3E%3C/svg%3E"
+    />
+    <title>Tamaru | ファイル滞留の見える化</title>
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <aside>
+        <div class="brand">Tamaru<small>SHARED FOLDER INSIGHTS</small></div>
+        <div>
+          <div class="side-label">WORKSPACE</div>
+          <div class="side-link">ファイルの滞留状況</div>
+        </div>
+        <div class="side-note">
+          受け渡しフォルダにある<br />ファイルの量と経過日数を<br />ひとつの画面で確認。
+        </div>
+        <div class="side-bottom">
+          READ ONLY · v0.1.0<br />ファイルの中身は読みません。<br />削除・移動は行いません。
+        </div>
+      </aside>
+      <main>
+        <header>
+          <div>
+            <div class="eyebrow">FOLDER INVENTORY</div>
+            <h1>ファイルの滞留状況</h1>
+            <p class="subtitle">
+              初めて検出した日から、何日置かれているかを確認できます。
+            </p>
+          </div>
+          <div class="actions">
+            <span id="current-user" class="muted"></span
+            ><button id="admin-settings">管理者管理</button
+            ><button id="settings">対象フォルダ設定</button
+            ><button id="scan" class="primary">今すぐ収集</button>
+          </div>
+        </header>
+        <p id="schedule-status" class="bottom-note"></p>
+        <div id="error" class="error-banner hidden" role="alert"></div>
+        <div class="notice">
+          <span class="notice-icon">i</span>
+          <p>
+            <strong>このツールは調査専用です。</strong>
+            既存ファイルは初回の収集で0日から記録します。30日以上の表示は目安であり、自動削除は行いません。
+          </p>
+        </div>
+        <section class="stats" aria-label="全体の集計">
+          <div class="stat">
+            <label>記録中のファイル</label>
+            <div class="value">
+              <span id="total-count">0</span><small>件</small>
+            </div>
+            <div class="foot">設定中の対象フォルダの合計</div>
+          </div>
+          <div class="stat">
+            <label>ファイルの合計容量</label>
+            <div class="value" id="total-size">0 <small>B</small></div>
+            <div class="foot">最終確認時点のファイルサイズ</div>
+          </div>
+          <div class="stat warn">
+            <label>30日以上のファイル</label>
+            <div class="value">
+              <span id="aged-count">0</span><small>件</small>
+            </div>
+            <div class="foot">初回検出から30日以上</div>
+          </div>
+          <div class="stat">
+            <label>最も長い滞留日数</label>
+            <div class="value">
+              <span id="max-age">0</span><small>日</small>
+            </div>
+            <div class="foot" id="uncertain">未確認のファイル 0件</div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>ファイル一覧</h2>
+            <span id="freshness" class="muted"></span>
+            <div class="status-line" aria-live="polite">
+              <span class="dot" id="status-dot"></span
+              ><span id="scan-status">待機中</span>
+            </div>
+          </div>
+          <div class="scan-path hidden" id="scan-path"></div>
+          <div class="filterbar">
+            <div class="tabs" aria-label="表示単位">
+              <button class="active" id="files-tab">ファイル別</button
+              ><button id="folders-tab">フォルダ別</button>
+            </div>
+            <input
+              id="search"
+              type="search"
+              placeholder="ファイル名・パスを検索"
+              aria-label="ファイル名・パスを検索"
+            /><select id="root" aria-label="対象フォルダ">
+              <option value="">すべての対象フォルダ</option></select
+            ><select id="age" aria-label="滞留日数">
+              <option value="0">すべての日数</option>
+              <option value="7">7日以上</option>
+              <option value="14">14日以上</option>
+              <option value="30">30日以上</option>
+              <option value="60">60日以上</option>
+              <option value="90">90日以上</option></select
+            ><select id="depth" aria-label="集計する階層">
+              <option value="0">各フォルダ直下</option>
+              <option value="1">1階層目ごと（配下含む）</option>
+              <option value="2">2階層目ごと（配下含む）</option>
+              <option value="3">3階層目ごと（配下含む）</option></select
+            ><select id="sort" aria-label="並べ替え">
+              <option value="age">滞留日数が長い順</option>
+              <option value="size">容量が大きい順</option>
+              <option value="path">パス順</option></select
+            ><button id="export">CSV出力</button>
+          </div>
+          <div class="breadcrumb" id="breadcrumb"></div>
+          <div class="table-wrap">
+            <table>
+              <thead id="thead"></thead>
+              <tbody id="tbody"></tbody>
+            </table>
+            <div id="empty" class="empty hidden">
+              <strong>まだ記録がありません</strong
+              ><span
+                >対象フォルダを設定し、「今すぐ収集」を押してください。</span
+              >
+            </div>
+          </div>
+          <div class="pager">
+            <span id="result-count">0件</span>
+            <div class="foot-actions">
+              <button id="prev">前へ</button><span id="page-label">1 / 1</span
+              ><button id="next">次へ</button>
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>最近の収集</h2>
+            <span class="muted" style="font-size: 11px"
+              >対象フォルダごと・直近20回</span
+            >
+          </div>
+          <div class="table-wrap" style="min-height: 0">
+            <table class="run-table">
+              <thead>
+                <tr>
+                  <th>開始日時</th>
+                  <th>対象フォルダ</th>
+                  <th class="num">検出ファイル</th>
+                  <th>結果</th>
+                  <th class="num">エラー / リンク除外</th>
+                </tr>
+              </thead>
+              <tbody id="runs"></tbody>
+            </table>
+          </div>
+          <details id="errors-detail" class="hidden">
+            <summary id="errors-label">エラーの詳細</summary>
+            <div id="errors-list"></div>
+          </details>
+        </section>
+        <p class="bottom-note">
+          フォルダ別は「直下」または「指定階層の配下を含む集計」を選べます。全体集計にはすべての階層を含みます。<br />「未確認」は今回の収集で状態を確定できない記録です。日数は経過時間24時間ごとに加算します。画面上の日時は閲覧PCのタイムゾーンです。
+        </p>
+        <div class="pager" style="padding: 12px 0; border: 0">
+          <span id="data-location"></span
+          ><button id="audit-button">操作履歴</button
+          ><button id="logout">ログアウト</button>
+        </div>
+      </main>
+    </div>
+    <div
+      id="modal"
+      class="modal-backdrop hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="modal-title"
+    >
+      <div class="modal">
+        <h2 id="modal-title">対象フォルダ設定</h2>
+        <p class="subtitle">
+          指定したフォルダと、その配下の全階層を確認します。
+        </p>
+        <label for="targets">調査するフォルダ（1行に1つ）</label
+        ><textarea
+          id="targets"
+          spellcheck="false"
+          placeholder="D:\受け渡し\営業部&#10;\\server\share\受け渡し"
+        ></textarea>
+        <p class="help">
+          絶対パスまたはUNCパスを指定できます。重複する親子フォルダは登録できません。接続には、サーバー上でTamaruを実行するWindowsユーザーの権限を使います。
+        </p>
+        <label for="daily-time">1日1回の自動収集</label>
+        <div style="display: flex; align-items: center; gap: 12px">
+          <label style="margin: 0"
+            ><input id="daily-enabled" type="checkbox" /> 有効にする</label
+          ><input id="daily-time" type="time" value="02:00" /><span
+            >日本時間</span
+          >
+        </div>
+        <div class="notice" style="margin: 20px 0 0">
+          <p>
+            「今すぐ収集」で直ちに開始できます。自動収集を有効にすると、指定時刻に1日1回実行します。対象から外したフォルダの過去の記録は保持し、一覧からは非表示にします。
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button id="cancel">キャンセル</button
+          ><button id="save" class="primary">設定を保存</button>
+        </div>
+        <p
+          id="modal-error"
+          class="help"
+          style="color: #9b3820"
+          role="alert"
+        ></p>
+      </div>
+    </div>
+    <div
+      id="admins-modal"
+      class="modal-backdrop hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="admins-title"
+    >
+      <div class="modal">
+        <h2 id="admins-title">管理者管理</h2>
+        <p class="help">
+          すべての管理者は、閲覧・収集・設定変更・管理者の追加ができます。
+        </p>
+        <div id="admins-list"></div>
+        <h3>管理者を追加</h3>
+        <div class="admin-form">
+          <input
+            id="new-username"
+            placeholder="ID（英数字3文字以上）"
+            aria-label="新しい管理者ID"
+            autocomplete="off"
+          /><input
+            id="new-display"
+            placeholder="表示名"
+            aria-label="新しい管理者の表示名"
+            autocomplete="off"
+          /><input
+            id="new-password"
+            type="password"
+            placeholder="パスワード（12文字以上）"
+            aria-label="新しい管理者のパスワード"
+            autocomplete="new-password"
+          />
+        </div>
+        <p id="admin-error" class="help" role="alert"></p>
+        <div class="modal-footer">
+          <button id="close-admins">閉じる</button
+          ><button id="add-admin" class="primary">管理者を追加</button>
+        </div>
+      </div>
+    </div>
+    <div
+      id="password-modal"
+      class="modal-backdrop hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="password-title"
+    >
+      <div class="modal">
+        <h2 id="password-title">パスワードの再設定</h2>
+        <p id="password-target"></p>
+        <input
+          id="reset-password"
+          type="password"
+          autocomplete="new-password"
+          placeholder="新しいパスワード（12文字以上）"
+          aria-label="再設定するパスワード"
+        />
+        <p id="password-error" role="alert"></p>
+        <div class="modal-footer">
+          <button id="cancel-password">キャンセル</button
+          ><button id="save-password" class="primary">再設定する</button>
+        </div>
+      </div>
+    </div>
+    <div
+      id="audit-modal"
+      class="modal-backdrop hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="audit-title"
+    >
+      <div class="modal">
+        <h2 id="audit-title">操作履歴</h2>
+        <div id="audit-list"></div>
+        <div class="modal-footer"><button id="close-audit">閉じる</button></div>
+      </div>
+    </div>
+    <div id="toast" class="toast hidden" role="status"></div>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>
