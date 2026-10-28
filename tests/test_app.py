@@ -186,6 +186,24 @@ def test_scan_counts_age_preserves_metadata_and_export(setup):
     assert client.get("/api/summary").json()["totals"]["bytes"] == 5
 
 
+def test_missing_list_and_export_are_authenticated_and_match_scan(setup):
+    app, client, target, state = setup
+    assert client.get("/api/list?mode=missing").status_code == 401
+    assert client.get("/api/export?mode=missing").status_code == 401
+    source = target / "removed.txt"
+    source.write_bytes(b"gone")
+    headers = login(client)
+    configure(client, target, headers)
+    scan(app, client, headers)
+    source.unlink()
+    scan(app, client, headers)
+    result = client.get("/api/list?mode=missing").json()
+    assert result["count"] == 1
+    assert result["rows"][0]["name"] == "removed.txt"
+    assert result["comparisons"][0]["status"] == "完了"
+    assert "removed.txt" in client.get("/api/export?mode=missing").content.decode("utf-8-sig")
+
+
 def test_atomic_publish_and_duplicate_scan_rejected(setup, monkeypatch):
     app, client, target, state = setup
     (target / "old.txt").write_text("old")
@@ -517,7 +535,7 @@ def test_listing_keeps_one_snapshot_during_publication(tmp_path, monkeypatch):
             if sql.startswith("SELECT count(*) FROM files") and not changed:
                 with contextlib.closing(connect()) as writer:
                     writer.execute("""INSERT INTO files SELECT root_id,key || '-new',path || '-new',
-                        relative_path || '-new',parent,name || '-new',size,mtime_ns,first_seen,last_seen,seen_run,present FROM files""")
+                        relative_path || '-new',parent,name || '-new',size,mtime_ns,first_seen,last_seen,seen_run,present,missing_run FROM files""")
                     writer.commit()
                 changed.append(True)
             return cursor

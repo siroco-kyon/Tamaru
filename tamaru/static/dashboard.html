@@ -91,7 +91,8 @@
           <div class="filterbar">
             <div class="tabs" aria-label="表示単位">
               <button class="active" id="folders-tab">フォルダをたどる</button
-              ><button id="files-tab">全ファイル一覧</button>
+              ><button id="files-tab">全ファイル一覧</button
+              ><button id="missing-tab">今回見つからない</button>
             </div>
             <input
               id="search"
@@ -128,6 +129,15 @@
               この配下の全ファイル
             </button>
           </div>
+          <p id="missing-note" class="report-note hidden">
+            最新の収集で新たに見つからなくなったファイルです。削除・移動・名前変更の区別や、実際に削除された日時の特定はできません。
+            一覧は収集のたびに更新します。この機能の追加前に見つからなくなったファイルは表示できません。
+          </p>
+          <p
+            id="missing-comparisons"
+            class="report-note hidden"
+            aria-live="polite"
+          ></p>
           <div class="table-wrap">
             <table>
               <thead id="thead"></thead>
