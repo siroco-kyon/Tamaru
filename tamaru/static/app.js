@@ -79,7 +79,7 @@ function params() {
     limit: "100",
     q: $("search").value,
     root: $("root").value,
-    age: $("age").value,
+    age: view === "missing" ? "0" : $("age").value,
     sort: $("sort").value,
     folder,
     recursive: recursiveFolder ? "1" : "0",
@@ -97,6 +97,12 @@ function navigate(rootId = "", path = "") {
 function updateTabs() {
   $("files-tab").classList.toggle("active", view === "files");
   $("folders-tab").classList.toggle("active", view === "browse");
+  $("missing-tab").classList.toggle("active", view === "missing");
+  $("age").disabled = view === "missing";
+  $("sort").querySelector('[value="age"]').textContent =
+    view === "missing" ? "初回検出が古い順" : "滞留日数が長い順";
+  $("missing-note").classList.toggle("hidden", view !== "missing");
+  $("missing-comparisons").classList.toggle("hidden", view !== "missing");
 }
 function breadcrumbs(rootId) {
   const nav = $("breadcrumb");
@@ -127,6 +133,7 @@ function breadcrumbs(rootId) {
     ),
   );
   if (view === "files") add("ファイル一覧", () => {}, true);
+  if (view === "missing") add("今回見つからない", () => {}, true);
 }
 async function list() {
   const id = ++requestId;
@@ -151,14 +158,18 @@ async function list() {
   $("prev").disabled = page <= 1;
   $("next").disabled = page >= totalPages;
   $("thead").innerHTML =
-    view === "files"
-      ? '<tr><th>ファイル名 / フォルダ</th><th class="num">容量</th><th class="num">滞留日数</th><th>初回検出</th><th>最終確認 / 状態</th></tr>'
-      : '<tr><th>名前</th><th class="num">容量</th><th class="num">ファイル数</th><th class="num">最長滞留日数</th><th>最終確認 / 状態</th></tr>';
+    view === "missing"
+      ? '<tr><th>ファイル名 / 元のフォルダ</th><th class="num">前回確認時の容量</th><th>最後に確認した収集</th><th>見つからなかった収集</th><th>状態</th></tr>'
+      : view === "files"
+        ? '<tr><th>ファイル名 / フォルダ</th><th class="num">容量</th><th class="num">滞留日数</th><th>初回検出</th><th>最終確認 / 状態</th></tr>'
+        : '<tr><th>名前</th><th class="num">容量</th><th class="num">ファイル数</th><th class="num">最長滞留日数</th><th>最終確認 / 状態</th></tr>';
   $("tbody").innerHTML = d.rows
     .map((r, i) =>
-      view === "files"
-        ? `<tr><td><div class="filename">${esc(r.name)}</div><div class="path" title="${esc(r.path)}">${esc(r.parent)}</div></td><td class="num" title="${fmt(r.size)} bytes">${bytes(r.size)}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td style="white-space:nowrap">${date(r.first_seen)}</td><td><div style="white-space:nowrap">${date(r.last_seen)}</div><span class="state ${r.status === "未確認" ? "unknown" : ""}">${esc(r.status)}</span></td></tr>`
-        : `<tr><td><div class="entry-name"><span class="entry-icon" aria-hidden="true">${r.kind === "folder" ? "📁" : "📄"}</span><div>${r.kind === "folder" ? `<button class="folder-button" data-row="${i}" title="${esc(r.path)}">${esc(r.name)}</button><div class="entry-detail">配下を含む${!d.root_id ? " · " + esc(r.path) : ""}</div>` : `<div class="filename" title="${esc(r.path)}">${esc(r.name)}</div><div class="entry-detail">このフォルダ直下のファイル</div>`}</div></div></td><td class="num">${bytes(r.bytes)}</td><td class="num">${r.kind === "folder" ? fmt(r.count) + "件" : "—"}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td>${date(r.last_seen)}<br><span class="state ${r.uncertain ? "unknown" : ""}">${r.uncertain ? "未確認 " + fmt(r.uncertain) + "件" : "確認済み"}</span></td></tr>`,
+      view === "missing"
+        ? `<tr><td><div class="filename">${esc(r.name)}</div><div class="path" title="${esc(r.path)}">${esc(r.parent)}</div></td><td class="num" title="${fmt(r.size)} bytes">${bytes(r.size)}</td><td style="white-space:nowrap">${date(r.last_seen)}</td><td style="white-space:nowrap">${date(r.missing_at)}</td><td><span class="state unknown">今回見つからず</span></td></tr>`
+        : view === "files"
+          ? `<tr><td><div class="filename">${esc(r.name)}</div><div class="path" title="${esc(r.path)}">${esc(r.parent)}</div></td><td class="num" title="${fmt(r.size)} bytes">${bytes(r.size)}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td style="white-space:nowrap">${date(r.first_seen)}</td><td><div style="white-space:nowrap">${date(r.last_seen)}</div><span class="state ${r.status === "未確認" ? "unknown" : ""}">${esc(r.status)}</span></td></tr>`
+          : `<tr><td><div class="entry-name"><span class="entry-icon" aria-hidden="true">${r.kind === "folder" ? "📁" : "📄"}</span><div>${r.kind === "folder" ? `<button class="folder-button" data-row="${i}" title="${esc(r.path)}">${esc(r.name)}</button><div class="entry-detail">配下を含む${!d.root_id ? " · " + esc(r.path) : ""}</div>` : `<div class="filename" title="${esc(r.path)}">${esc(r.name)}</div><div class="entry-detail">このフォルダ直下のファイル</div>`}</div></div></td><td class="num">${bytes(r.bytes)}</td><td class="num">${r.kind === "folder" ? fmt(r.count) + "件" : "—"}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td>${date(r.last_seen)}<br><span class="state ${r.uncertain ? "unknown" : ""}">${r.uncertain ? "未確認 " + fmt(r.uncertain) + "件" : "確認済み"}</span></td></tr>`,
     )
     .join("");
   $("tbody")
@@ -178,6 +189,12 @@ async function list() {
     $("empty").querySelector("span").textContent = hadScan
       ? "検索条件を変えるか、収集結果を確認してください。"
       : "対象フォルダを設定し、「今すぐ収集」を押してください。";
+    if (view === "missing") {
+      $("empty").querySelector("strong").textContent =
+        "表示できるファイルはありません";
+      $("empty").querySelector("span").textContent =
+        "検索条件と対象フォルダの収集状態を確認してください。初回の収集では比較できません。";
+    }
   }
   if (view === "browse") {
     trail = d.breadcrumbs;
@@ -191,7 +208,8 @@ async function list() {
     $("location-summary").textContent =
       `配下 ${fmt(d.totals.count)}ファイル · ${bytes(d.totals.bytes)}${d.totals.uncertain ? " · 未確認 " + fmt(d.totals.uncertain) + "件" : ""}（現在の検索・日数条件）`;
   } else {
-    $("location-title").textContent = "ファイル一覧";
+    $("location-title").textContent =
+      view === "missing" ? "今回見つからないファイル" : "ファイル一覧";
     $("location-path").textContent =
       folder ||
       ($("root").value
@@ -199,6 +217,17 @@ async function list() {
         : "すべての対象フォルダ");
     $("location-summary").textContent =
       `${fmt(d.count)}ファイル · 配下の階層をまとめて表示`;
+    if (view === "missing") {
+      $("location-summary").textContent =
+        `${fmt(d.count)}ファイル · 日時は収集の開始時刻です。前回の収集にエラーがあった場合は、最後に確認できた時点からの変化です。`;
+      $("missing-comparisons").textContent =
+        (d.comparisons || [])
+          .map(
+            (r) =>
+              `${r.path}：${date(r.observed_at)} · ${r.status === "完了" ? "判定済み" : "判定できません（" + r.status + "）。エラーを確認して再収集してください"}`,
+          )
+          .join(" / ") || "対象フォルダを設定し、収集を実行してください。";
+    }
   }
   $("subtree-files").classList.toggle(
     "hidden",
@@ -314,6 +343,7 @@ function setView(mode) {
 }
 $("files-tab").onclick = () => setView("files");
 $("folders-tab").onclick = () => setView("browse");
+$("missing-tab").onclick = () => setView("missing");
 $("subtree-files").onclick = () => {
   view = "files";
   page = 1;

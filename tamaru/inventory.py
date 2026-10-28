@@ -126,7 +126,7 @@ class Inventory:
                     relative_path TEXT NOT NULL, parent TEXT NOT NULL, name TEXT NOT NULL,
                     size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
                     first_seen REAL NOT NULL, last_seen REAL NOT NULL, seen_run INTEGER NOT NULL,
-                    present INTEGER NOT NULL DEFAULT 1,
+                    present INTEGER NOT NULL DEFAULT 1, missing_run INTEGER,
                     PRIMARY KEY(root_id, key));
                 CREATE INDEX IF NOT EXISTS ix_files_age ON files(present,first_seen);
                 CREATE INDEX IF NOT EXISTS ix_files_parent ON files(root_id,present,parent);
@@ -135,6 +135,13 @@ class Inventory:
                     message TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS ix_errors_run ON errors(run_id);
             """)
+            # Serialize schema checks so concurrent startup cannot add a column twice.
+            db.execute("BEGIN IMMEDIATE")
+            if "missing_run" not in {
+                r[1] for r in db.execute("PRAGMA table_info(files)")
+            }:
+                db.execute("ALTER TABLE files ADD COLUMN missing_run INTEGER")
+            db.commit()
             try:
                 with ScanLock(self.state / "scan.lock"):
                     db.execute("UPDATE roots SET status='中断' WHERE status='走査中'")
@@ -286,7 +293,7 @@ class Inventory:
                           mtime_ns=excluded.mtime_ns,
                           first_seen=CASE WHEN files.present=0 THEN excluded.first_seen ELSE files.first_seen END,
                           last_seen=excluded.last_seen,
-                          seen_run=excluded.seen_run,present=1
+                          seen_run=excluded.seen_run,present=1,missing_run=NULL
                     """,
                         batch,
                     )
@@ -365,8 +372,8 @@ class Inventory:
             flush()
             if errors == 0:
                 db.execute(
-                    "UPDATE files SET present=0 WHERE root_id=? AND seen_run<>? AND present=1",
-                    (root_id, run_id),
+                    "UPDATE files SET present=0,missing_run=? WHERE root_id=? AND seen_run<>? AND present=1",
+                    (run_id, root_id, run_id),
                 )
             status = "完了" if errors == 0 else "一部未確認"
             db.execute(
@@ -408,13 +415,18 @@ class Inventory:
         )
 
     def where(self, db, params, now):
+        missing = params.get("mode") == "missing"
         roots = [r["id"] for r in self.selected_roots(db)]
         clause = (
-            "f.present=1 AND f.root_id IN ("
+            f"f.present={0 if missing else 1} AND f.root_id IN ("
             + (",".join("?" for _ in roots) or "NULL")
             + ")"
         )
         values = roots[:]
+        if missing:
+            clause += """ AND EXISTS(SELECT 1 FROM roots mr JOIN runs m ON m.id=mr.latest_run
+                WHERE mr.id=f.root_id AND mr.latest_run=f.missing_run
+                AND mr.status='完了' AND m.status='完了' AND m.finished IS NOT NULL)"""
         root = params.get("root", "")
         if root:
             clause += " AND f.root_id=?"
@@ -424,11 +436,11 @@ class Inventory:
             clause += " AND instr(lower(f.path),lower(?))>0"
             values.append(query)
         age = max(0, min(365000, int(params.get("age", "0") or 0)))
-        if age:
+        if age and not missing:
             clause += " AND f.first_seen<=?"
             values.append(now - age * DAY)
         folder = params.get("folder", "")
-        if folder:
+        if folder and not missing:
             if params.get("recursive") == "1":
                 clause += " AND (f.parent=? OR substr(f.path,1,length(?))=?)"
                 prefix = folder.rstrip(os.sep) + os.sep
@@ -484,9 +496,25 @@ class Inventory:
         page = max(1, min(10000000, int(params.get("page", "1"))))
         limit = max(10, min(200, int(params.get("limit", "100"))))
         mode = params.get("mode", "files")
+        comparisons = []
         with contextlib.closing(self.connect()) as db:
             db.execute("BEGIN")
             clause, args = self.where(db, params, now)
+            if mode == "missing":
+                for root in self.selected_roots(db):
+                    if params.get("root") and root["id"] != int(params["root"]):
+                        continue
+                    run = db.execute(
+                        "SELECT started,status FROM runs WHERE id=?",
+                        (root["latest_run"],),
+                    ).fetchone()
+                    comparisons.append(
+                        {
+                            "path": root["path"],
+                            "status": root["status"],
+                            "observed_at": run["started"] if run else None,
+                        }
+                    )
             if mode == "folders":
                 count = db.execute(
                     f"SELECT count(*) FROM (SELECT f.root_id,f.parent FROM files f WHERE {clause} GROUP BY f.root_id,f.parent)",
@@ -523,8 +551,10 @@ class Inventory:
                     dict(r)
                     for r in db.execute(
                         f"""SELECT f.*,r.path AS root_path,
-                    CASE WHEN f.seen_run=r.latest_run AND r.status IN ('完了','一部未確認') THEN '確認済み' ELSE '未確認' END AS status
-                    FROM files f JOIN roots r ON r.id=f.root_id WHERE {clause}
+                    m.started AS missing_at,
+                    CASE WHEN f.present=0 THEN '今回見つからず' WHEN f.seen_run=r.latest_run AND r.status IN ('完了','一部未確認') THEN '確認済み' ELSE '未確認' END AS status
+                    FROM files f JOIN roots r ON r.id=f.root_id
+                    LEFT JOIN runs m ON m.id=f.missing_run WHERE {clause}
                     ORDER BY {order} LIMIT ? OFFSET ?""",
                         [*args, limit, (page - 1) * limit],
                     )
@@ -537,6 +567,7 @@ class Inventory:
             "page": page,
             "limit": limit,
             "mode": mode,
+            "comparisons": comparisons,
         }
 
     def browse(self, params, now=None):
@@ -674,6 +705,7 @@ class Inventory:
 
     def csv_chunks(self, params):
         # Stream all filtered files; never build a full inventory in memory.
+        missing = params.get("mode") == "missing"
         buffer = io.StringIO(newline="")
         writer = csv.writer(buffer)
 
@@ -700,21 +732,25 @@ class Inventory:
                 "対象フォルダ",
                 "ファイルの場所",
                 "ファイル名",
-                "容量(bytes)",
-                "滞留日数",
+                "前回確認時の容量(bytes)" if missing else "容量(bytes)",
+                "最終確認時点の滞留日数" if missing else "滞留日数",
                 "初回検出日時",
                 "最終確認日時",
                 "元の更新日時",
                 "確認状態",
             ]
+            + (["見つからないことを確認した収集の開始日時"] if missing else [])
         )
         now = time.time()
         with contextlib.closing(self.connect()) as db:
+            db.execute("BEGIN")
             clause, args = self.where(db, params, now)
             cursor = db.execute(
                 f"""SELECT f.*,r.path AS root_path,
-                CASE WHEN f.seen_run=r.latest_run AND r.status IN ('完了','一部未確認') THEN '確認済み' ELSE '未確認' END AS status
-                FROM files f JOIN roots r ON r.id=f.root_id WHERE {clause} ORDER BY f.first_seen,f.path""",
+                m.started AS missing_at,
+                CASE WHEN f.present=0 THEN '今回見つからず（削除・移動・名前変更等）' WHEN f.seen_run=r.latest_run AND r.status IN ('完了','一部未確認') THEN '確認済み' ELSE '未確認' END AS status
+                FROM files f JOIN roots r ON r.id=f.root_id
+                LEFT JOIN runs m ON m.id=f.missing_run WHERE {clause} ORDER BY f.first_seen,f.path""",
                 args,
             )
             for row in cursor:
@@ -724,10 +760,20 @@ class Inventory:
                         row["path"],
                         row["name"],
                         row["size"],
-                        max(0, int((now - row["first_seen"]) / DAY)),
+                        max(
+                            0,
+                            int(
+                                (
+                                    (row["last_seen"] if missing else now)
+                                    - row["first_seen"]
+                                )
+                                / DAY
+                            ),
+                        ),
                         stamp(row["first_seen"]),
                         stamp(row["last_seen"]),
                         stamp(row["mtime_ns"] / 1e9),
                         row["status"],
                     ]
+                    + ([stamp(row["missing_at"])] if missing else [])
                 )
