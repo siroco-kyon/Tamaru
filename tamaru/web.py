@@ -17,12 +17,13 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__
 from .inventory import Inventory, ScanLock
 from .jobs import Collector, DEFAULT_SCHEDULE
+from .deletion import DeletionService
 from .security import Store
 
 STATIC = Path(__file__).with_name("static")
@@ -57,6 +58,7 @@ class AdminChange(BaseModel):
 
 
 class Configuration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     targets: list[str] = Field(max_length=100)
     enabled: bool = True
     time: str = Field(pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
@@ -92,6 +94,7 @@ def create_app(
     app.state.inventory = inventory
     app.state.store = store
     app.state.collector = collector
+    app.state.deletion = DeletionService()
     app.add_middleware(
         TrustedHostMiddleware, allowed_hosts=allowed_hosts or ["localhost", "127.0.0.1"]
     )
@@ -235,6 +238,10 @@ def create_app(
     @app.get("/api/me")
     def me(user=Depends(admin)):
         return user
+
+    @app.get("/api/deletion/status")
+    def deletion_status(user=Depends(admin)):
+        return DeletionService.status()
 
     @app.post("/api/logout")
     def logout(request: Request, response: Response, user=Depends(mutation)):
