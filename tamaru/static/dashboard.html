@@ -68,6 +68,7 @@
             <div class="value">
               <span id="aged-count">0</span><small>件</small>
             </div>
+            <div class="aged-capacity" id="aged-size">合計 0 B</div>
             <div class="foot">初回検出から30日以上</div>
           </div>
           <div class="stat">
@@ -111,8 +112,37 @@
             ><select id="sort" aria-label="並べ替え">
               <option value="size">容量が大きい順</option>
               <option value="age">滞留日数が長い順</option>
+              <option value="modified_newest">更新が新しい順</option>
+              <option value="modified_oldest">更新が古い順</option>
               <option value="path">パス順</option></select
             ><button id="export">CSV出力</button>
+          </div>
+          <div
+            class="filterbar modification-filters"
+            aria-label="更新日時の絞り込み"
+          >
+            <label class="filter-field"
+              >未更新日数
+              <select id="unmodified-days">
+                <option value="0">すべて</option>
+                <option value="30">30日以上、更新なし</option>
+                <option value="90">90日以上、更新なし</option>
+                <option value="180">180日以上、更新なし</option>
+                <option value="365">365日以上、更新なし</option>
+              </select>
+            </label>
+            <label class="filter-field"
+              >更新日（開始）
+              <input id="modified-from" type="date" />
+            </label>
+            <label class="filter-field"
+              >更新日（終了・当日を含む）
+              <input id="modified-to" type="date" />
+            </label>
+            <button id="modified-reset">更新条件をクリア</button>
+            <span class="filter-help"
+              >更新日は閲覧PCのタイムゾーンで指定します。</span
+            >
           </div>
           <nav
             class="breadcrumb"
@@ -239,6 +269,7 @@
           </details>
         </section>
         <p class="bottom-note">
+          未更新日数はファイル更新日時から24時間ごとに1日として計算します。未確認・消失ファイルは最終確認時点の日数です。更新日時順でもフォルダ行を先に表示します。<br />
           フォルダをクリックすると、子フォルダと直下のファイルを表示します。フォルダの容量・件数は配下全体の合計です。検索・日数の条件を指定した場合は、該当するファイルだけを集計します。空フォルダは表示しません。<br />「全ファイル一覧」では階層をまたいで容量順などに並べられます。「未確認」は今回の収集で状態を確定できない記録です。画面上の日時は閲覧PCのタイムゾーンです。
         </p>
         <div class="pager" style="padding: 12px 0; border: 0">

@@ -195,6 +195,34 @@ h2 {
 .stat.warn .value {
   color: var(--amber);
 }
+.aged-capacity {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.modification-filters {
+  padding-top: 0;
+  align-items: flex-end;
+}
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 0;
+  max-width: 100%;
+}
+.filter-field input,
+.filter-field select {
+  min-width: 0;
+  max-width: 100%;
+}
+.filter-help {
+  font-size: 12px;
+  color: var(--muted);
+  padding-bottom: 9px;
+}
 .panel {
   background: white;
   border: 1px solid var(--line);
