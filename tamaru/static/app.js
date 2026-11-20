@@ -47,6 +47,20 @@ function date(n) {
 function modifiedDate(n) {
   return date(n == null ? null : n / 1e9);
 }
+function unmodified(row) {
+  if (row.unmodified_days == null) return "—";
+  const historical = row.status !== "確認済み" && row.uncertain !== 0;
+  return `${fmt(row.unmodified_days)}日${historical ? '<div class="entry-detail">最終確認時点</div>' : ""}`;
+}
+function validUpdateRange() {
+  const from = $("modified-from").value;
+  const to = $("modified-to").value;
+  if (from && to && from > to) {
+    error(Error("更新日の開始日は終了日以前にしてください。"));
+    return false;
+  }
+  return true;
+}
 function error(e) {
   $("error").textContent = e.message || String(e);
   $("error").classList.remove("hidden");
@@ -83,6 +97,10 @@ function params() {
     q: $("search").value,
     root: $("root").value,
     age: view === "missing" ? "0" : $("age").value,
+    unmodified_days: $("unmodified-days").value,
+    modified_from: $("modified-from").value,
+    modified_to: $("modified-to").value,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     sort: $("sort").value,
     folder,
     recursive: recursiveFolder ? "1" : "0",
@@ -140,6 +158,7 @@ function breadcrumbs(rootId) {
 }
 async function list() {
   const id = ++requestId;
+  if (!validUpdateRange()) return false;
   let d;
   try {
     d = await api(
@@ -162,17 +181,17 @@ async function list() {
   $("next").disabled = page >= totalPages;
   $("thead").innerHTML =
     view === "missing"
-      ? '<tr><th>ファイル名 / 元のフォルダ</th><th class="num">前回確認時の容量</th><th>ファイル更新日時</th><th>最後に確認した収集</th><th>見つからなかった収集</th><th>状態</th></tr>'
+      ? '<tr><th>ファイル名 / 元のフォルダ</th><th class="num">前回確認時の容量</th><th>ファイル更新日時</th><th class="num">未更新日数</th><th>最後に確認した収集</th><th>見つからなかった収集</th><th>状態</th></tr>'
       : view === "files"
-        ? '<tr><th>ファイル名 / フォルダ</th><th class="num">容量</th><th>ファイル更新日時</th><th class="num">滞留日数</th><th>初回検出</th><th>最終確認 / 状態</th></tr>'
-        : '<tr><th>名前</th><th class="num">容量</th><th>ファイル更新日時</th><th class="num">ファイル数</th><th class="num">最長滞留日数</th><th>最終確認 / 状態</th></tr>';
+        ? '<tr><th>ファイル名 / フォルダ</th><th class="num">容量</th><th>ファイル更新日時</th><th class="num">未更新日数</th><th class="num">滞留日数</th><th>初回検出</th><th>最終確認 / 状態</th></tr>'
+        : '<tr><th>名前</th><th class="num">容量</th><th>ファイル更新日時</th><th class="num">未更新日数</th><th class="num">ファイル数</th><th class="num">最長滞留日数</th><th>最終確認 / 状態</th></tr>';
   $("tbody").innerHTML = d.rows
     .map((r, i) =>
       view === "missing"
-        ? `<tr><td><div class="filename">${esc(r.name)}</div><div class="path" title="${esc(r.path)}">${esc(r.parent)}</div></td><td class="num" title="${fmt(r.size)} bytes">${bytes(r.size)}</td><td style="white-space:nowrap">${modifiedDate(r.mtime_ns)}</td><td style="white-space:nowrap">${date(r.last_seen)}</td><td style="white-space:nowrap">${date(r.missing_at)}</td><td><span class="state unknown">今回見つからず</span></td></tr>`
+        ? `<tr><td><div class="filename">${esc(r.name)}</div><div class="path" title="${esc(r.path)}">${esc(r.parent)}</div></td><td class="num" title="${fmt(r.size)} bytes">${bytes(r.size)}</td><td style="white-space:nowrap">${modifiedDate(r.mtime_ns)}</td><td class="num">${unmodified(r)}</td><td style="white-space:nowrap">${date(r.last_seen)}</td><td style="white-space:nowrap">${date(r.missing_at)}</td><td><span class="state unknown">今回見つからず</span></td></tr>`
         : view === "files"
-          ? `<tr><td><div class="filename">${esc(r.name)}</div><div class="path" title="${esc(r.path)}">${esc(r.parent)}</div></td><td class="num" title="${fmt(r.size)} bytes">${bytes(r.size)}</td><td style="white-space:nowrap">${modifiedDate(r.mtime_ns)}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td style="white-space:nowrap">${date(r.first_seen)}</td><td><div style="white-space:nowrap">${date(r.last_seen)}</div><span class="state ${r.status === "未確認" ? "unknown" : ""}">${esc(r.status)}</span></td></tr>`
-          : `<tr><td><div class="entry-name"><span class="entry-icon" aria-hidden="true">${r.kind === "folder" ? "📁" : "📄"}</span><div>${r.kind === "folder" ? `<button class="folder-button" data-row="${i}" title="${esc(r.path)}">${esc(r.name)}</button><div class="entry-detail">配下を含む${!d.root_id ? " · " + esc(r.path) : ""}</div>` : `<div class="filename" title="${esc(r.path)}">${esc(r.name)}</div><div class="entry-detail">このフォルダ直下のファイル</div>`}</div></div></td><td class="num">${bytes(r.bytes)}</td><td style="white-space:nowrap">${r.kind === "folder" ? "—" : modifiedDate(r.mtime_ns)}</td><td class="num">${r.kind === "folder" ? fmt(r.count) + "件" : "—"}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td>${date(r.last_seen)}<br><span class="state ${r.uncertain ? "unknown" : ""}">${r.uncertain ? "未確認 " + fmt(r.uncertain) + "件" : "確認済み"}</span></td></tr>`,
+          ? `<tr><td><div class="filename">${esc(r.name)}</div><div class="path" title="${esc(r.path)}">${esc(r.parent)}</div></td><td class="num" title="${fmt(r.size)} bytes">${bytes(r.size)}</td><td style="white-space:nowrap">${modifiedDate(r.mtime_ns)}</td><td class="num">${unmodified(r)}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td style="white-space:nowrap">${date(r.first_seen)}</td><td><div style="white-space:nowrap">${date(r.last_seen)}</div><span class="state ${r.status === "未確認" ? "unknown" : ""}">${esc(r.status)}</span></td></tr>`
+          : `<tr><td><div class="entry-name"><span class="entry-icon" aria-hidden="true">${r.kind === "folder" ? "📁" : "📄"}</span><div>${r.kind === "folder" ? `<button class="folder-button" data-row="${i}" title="${esc(r.path)}">${esc(r.name)}</button><div class="entry-detail">配下を含む${!d.root_id ? " · " + esc(r.path) : ""}</div>` : `<div class="filename" title="${esc(r.path)}">${esc(r.name)}</div><div class="entry-detail">このフォルダ直下のファイル</div>`}</div></div></td><td class="num">${bytes(r.bytes)}</td><td style="white-space:nowrap">${r.kind === "folder" ? "—" : modifiedDate(r.mtime_ns)}</td><td class="num">${unmodified(r)}</td><td class="num">${r.kind === "folder" ? fmt(r.count) + "件" : "—"}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td>${date(r.last_seen)}<br><span class="state ${r.uncertain ? "unknown" : ""}">${r.uncertain ? "未確認 " + fmt(r.uncertain) + "件" : "確認済み"}</span></td></tr>`,
     )
     .join("");
   $("tbody")
@@ -252,6 +271,7 @@ async function refresh() {
     $("total-size").innerHTML =
       `${esc(size[0])} <small>${esc(size[1])}</small>`;
     $("aged-count").textContent = fmt(d.totals.aged);
+    $("aged-size").textContent = "合計 " + bytes(d.totals.aged_bytes);
     $("max-age").textContent = fmt(d.totals.max_age);
     $("uncertain").textContent =
       "未確認のファイル " + fmt(d.totals.uncertain) + "件";
@@ -317,16 +337,17 @@ async function refresh() {
           `<div class="error-item"><strong>${esc(e.path)}</strong><br>${esc(e.message)}</div>`,
       )
       .join("");
-    const signature = JSON.stringify([
+    const reportSignature = JSON.stringify([
       d.totals,
       d.roots.map((r) => [r.id, r.latest_run, r.status]),
       busy,
     ]);
+    const signature = reportSignature + Math.floor(d.now / 60);
     if (signature !== lastSignature) {
       if (await list()) lastSignature = signature;
     }
-    if (signature !== lastReportSignature) {
-      if (await refreshReports()) lastReportSignature = signature;
+    if (reportSignature !== lastReportSignature) {
+      if (await refreshReports()) lastReportSignature = reportSignature;
     }
   } catch (e) {
     error(e);
@@ -362,7 +383,14 @@ $("search").oninput = () => {
     list().catch(error);
   }, 250);
 };
-["root", "age", "sort"].forEach(
+[
+  "root",
+  "age",
+  "sort",
+  "unmodified-days",
+  "modified-from",
+  "modified-to",
+].forEach(
   (id) =>
     ($(id).onchange = () => {
       if (id === "root") {
@@ -374,6 +402,13 @@ $("search").oninput = () => {
       list().catch(error);
     }),
 );
+$("modified-reset").onclick = () => {
+  $("unmodified-days").value = "0";
+  $("modified-from").value = "";
+  $("modified-to").value = "";
+  page = 1;
+  list().catch(error);
+};
 $("prev").onclick = () => {
   page--;
   list().catch(error);
@@ -437,6 +472,7 @@ $("scan").onclick = async () => {
   }
 };
 $("export").onclick = () => {
+  if (!validUpdateRange()) return;
   const p = params();
   const a = document.createElement("a");
   a.href = "/api/export?" + p;

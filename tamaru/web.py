@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__
-from .inventory import Inventory, ScanLock
+from .inventory import Inventory, ScanLock, modification_filters
 from .jobs import Collector, DEFAULT_SCHEDULE
 from .deletion import DeletionService
 from .security import Store
@@ -186,6 +186,8 @@ def create_app(
             raise ValueError("検索条件が長すぎます。")
         if params.get("root"):
             int(params["root"])
+        # Validate before constructing the streaming CSV response as well.
+        modification_filters(params)
         return params
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")

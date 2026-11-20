@@ -15,10 +15,15 @@ import stat
 import sys
 import threading
 import time
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import __version__
 
 DAY = 86400
+DAY_NS = DAY * 1_000_000_000
+CONFIRMED = (
+    "f.present=1 AND f.seen_run=r.latest_run AND r.status IN ('完了','一部未確認')"
+)
 BASE = (
     Path(sys.executable).resolve().parent
     if getattr(sys, "frozen", False)
@@ -48,6 +53,69 @@ def stamp(value):
         if value is not None
         else ""
     )
+
+
+def sqlite_number(value):
+    # Date bounds outside SQLite's int64 timestamps must still be comparable.
+    return value if -(2**63) <= value < 2**63 else float(value)
+
+
+def modification_filters(params):
+    """Validate calendar dates in the viewer's zone; return nanosecond bounds."""
+    try:
+        days = int(params.get("unmodified_days", "0") or "0")
+        if not 0 <= days <= 365000:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise ValueError("未更新日数は0〜365000の整数で指定してください。") from None
+    dates = []
+    for key in ("modified_from", "modified_to"):
+        value = params.get(key, "")
+        try:
+            day = dt.date.fromisoformat(value) if value else None
+            if day and day.isoformat() != value:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise ValueError(
+                "更新日はYYYY-MM-DD形式の有効な日付で指定してください。"
+            ) from None
+        dates.append(day)
+    start, end = dates
+    if start and end and start > end:
+        raise ValueError("更新日の開始日は終了日以前にしてください。")
+    zone_name = params.get("timezone", "Asia/Tokyo")
+    try:
+        if not isinstance(zone_name, str) or len(zone_name) > 100:
+            raise ValueError
+        zone = ZoneInfo(zone_name)
+    except (ValueError, ZoneInfoNotFoundError):
+        raise ValueError("更新日のタイムゾーンが正しくありません。") from None
+    try:
+        boundaries = (
+            dt.datetime.combine(start, dt.time(), zone) if start else None,
+            dt.datetime.combine(end + dt.timedelta(days=1), dt.time(), zone)
+            if end
+            else None,
+        )
+        return (
+            *(
+                sqlite_number(int(value.timestamp()) * 1_000_000_000)
+                if value is not None
+                else None
+                for value in boundaries
+            ),
+            days,
+        )
+    except (OverflowError, OSError, ValueError):
+        raise ValueError("更新日が対応範囲外です。") from None
+
+
+def unmodified_days(row, now):
+    if row.get("kind") == "folder" or row.get("mtime_ns") is None:
+        return None
+    confirmed = row.get("status") == "確認済み" or row.get("uncertain") == 0
+    observed = now if confirmed else row["last_seen"]
+    return max(0, (int(observed * 1_000_000_000) - row["mtime_ns"]) // DAY_NS)
 
 
 def is_link(info):
@@ -439,6 +507,21 @@ class Inventory:
         if age and not missing:
             clause += " AND f.first_seen<=?"
             values.append(now - age * DAY)
+        modified_from, modified_before, days = modification_filters(params)
+        if modified_from is not None:
+            clause += " AND f.mtime_ns>=?"
+            values.append(modified_from)
+        if modified_before is not None:
+            clause += " AND f.mtime_ns<?"
+            values.append(modified_before)
+        if days:
+            clause += f" AND f.mtime_ns<=CASE WHEN {CONFIRMED} THEN ? ELSE CAST(f.last_seen*1000000000 AS INTEGER)-? END"
+            values.extend(
+                [
+                    sqlite_number(int(now * 1_000_000_000) - days * DAY_NS),
+                    sqlite_number(days * DAY_NS),
+                ]
+            )
         folder = params.get("folder", "")
         if folder and not missing:
             if params.get("recursive") == "1":
@@ -460,10 +543,11 @@ class Inventory:
                 db.execute(
                     f"""SELECT count(*) AS count,coalesce(sum(f.size),0) AS bytes,
                 coalesce(sum(CASE WHEN f.first_seen<=? THEN 1 ELSE 0 END),0) AS aged,
+                coalesce(sum(CASE WHEN f.first_seen<=? THEN f.size ELSE 0 END),0) AS aged_bytes,
                 coalesce(max(cast(max(0,(?-f.first_seen)/86400) AS INTEGER)),0) AS max_age,
                 coalesce(sum(CASE WHEN f.seen_run<>r.latest_run OR r.status NOT IN ('完了','一部未確認') THEN 1 ELSE 0 END),0) AS uncertain
                 FROM files f JOIN roots r ON r.id=f.root_id WHERE {clause}""",
-                    [now - 30 * DAY, now, *args],
+                    [now - 30 * DAY, now - 30 * DAY, now, *args],
                 ).fetchone()
             )
             recent = [
@@ -517,7 +601,7 @@ class Inventory:
                     )
             if mode == "folders":
                 count = db.execute(
-                    f"SELECT count(*) FROM (SELECT f.root_id,f.parent FROM files f WHERE {clause} GROUP BY f.root_id,f.parent)",
+                    f"SELECT count(*) FROM (SELECT f.root_id,f.parent FROM files f JOIN roots r ON r.id=f.root_id WHERE {clause} GROUP BY f.root_id,f.parent)",
                     args,
                 ).fetchone()[0]
                 order = {
@@ -539,13 +623,16 @@ class Inventory:
                 ]
             else:
                 count = db.execute(
-                    f"SELECT count(*) FROM files f WHERE {clause}", args
+                    f"SELECT count(*) FROM files f JOIN roots r ON r.id=f.root_id WHERE {clause}",
+                    args,
                 ).fetchone()[0]
                 order = {
                     "age": "f.first_seen,f.path",
                     "size": "f.size DESC,f.path",
                     "path": "f.path",
                     "seen": "f.last_seen DESC,f.path",
+                    "modified_newest": "f.mtime_ns DESC,f.path",
+                    "modified_oldest": "f.mtime_ns,f.path",
                 }.get(params.get("sort"), "f.first_seen,f.path")
                 rows = [
                     dict(r)
@@ -561,6 +648,7 @@ class Inventory:
                 ]
         for row in rows:
             row["age"] = max(0, int((now - row["first_seen"]) / DAY))
+            row["unmodified_days"] = unmodified_days(row, now)
         return {
             "rows": rows,
             "count": count,
@@ -675,6 +763,8 @@ class Inventory:
                 order = {
                     "size": "f.size DESC,f.path",
                     "age": "f.first_seen,f.path",
+                    "modified_newest": "f.mtime_ns DESC,f.path",
+                    "modified_oldest": "f.mtime_ns,f.path",
                 }.get(sort, "f.path")
                 rows.extend(
                     {**dict(row), "kind": "file", "count": 1, "bytes": row["size"]}
@@ -692,6 +782,7 @@ class Inventory:
                 )
         for row in rows:
             row["age"] = max(0, int((now - row["first_seen"]) / DAY))
+            row["unmodified_days"] = unmodified_days(row, now)
         return {
             "rows": rows,
             "count": count,
