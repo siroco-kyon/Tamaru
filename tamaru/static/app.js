@@ -44,6 +44,9 @@ function date(n) {
         minute: "2-digit",
       });
 }
+function modifiedDate(n) {
+  return date(n == null ? null : n / 1e9);
+}
 function error(e) {
   $("error").textContent = e.message || String(e);
   $("error").classList.remove("hidden");
@@ -159,17 +162,17 @@ async function list() {
   $("next").disabled = page >= totalPages;
   $("thead").innerHTML =
     view === "missing"
-      ? '<tr><th>ファイル名 / 元のフォルダ</th><th class="num">前回確認時の容量</th><th>最後に確認した収集</th><th>見つからなかった収集</th><th>状態</th></tr>'
+      ? '<tr><th>ファイル名 / 元のフォルダ</th><th class="num">前回確認時の容量</th><th>ファイル更新日時</th><th>最後に確認した収集</th><th>見つからなかった収集</th><th>状態</th></tr>'
       : view === "files"
-        ? '<tr><th>ファイル名 / フォルダ</th><th class="num">容量</th><th class="num">滞留日数</th><th>初回検出</th><th>最終確認 / 状態</th></tr>'
-        : '<tr><th>名前</th><th class="num">容量</th><th class="num">ファイル数</th><th class="num">最長滞留日数</th><th>最終確認 / 状態</th></tr>';
+        ? '<tr><th>ファイル名 / フォルダ</th><th class="num">容量</th><th>ファイル更新日時</th><th class="num">滞留日数</th><th>初回検出</th><th>最終確認 / 状態</th></tr>'
+        : '<tr><th>名前</th><th class="num">容量</th><th>ファイル更新日時</th><th class="num">ファイル数</th><th class="num">最長滞留日数</th><th>最終確認 / 状態</th></tr>';
   $("tbody").innerHTML = d.rows
     .map((r, i) =>
       view === "missing"
-        ? `<tr><td><div class="filename">${esc(r.name)}</div><div class="path" title="${esc(r.path)}">${esc(r.parent)}</div></td><td class="num" title="${fmt(r.size)} bytes">${bytes(r.size)}</td><td style="white-space:nowrap">${date(r.last_seen)}</td><td style="white-space:nowrap">${date(r.missing_at)}</td><td><span class="state unknown">今回見つからず</span></td></tr>`
+        ? `<tr><td><div class="filename">${esc(r.name)}</div><div class="path" title="${esc(r.path)}">${esc(r.parent)}</div></td><td class="num" title="${fmt(r.size)} bytes">${bytes(r.size)}</td><td style="white-space:nowrap">${modifiedDate(r.mtime_ns)}</td><td style="white-space:nowrap">${date(r.last_seen)}</td><td style="white-space:nowrap">${date(r.missing_at)}</td><td><span class="state unknown">今回見つからず</span></td></tr>`
         : view === "files"
-          ? `<tr><td><div class="filename">${esc(r.name)}</div><div class="path" title="${esc(r.path)}">${esc(r.parent)}</div></td><td class="num" title="${fmt(r.size)} bytes">${bytes(r.size)}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td style="white-space:nowrap">${date(r.first_seen)}</td><td><div style="white-space:nowrap">${date(r.last_seen)}</div><span class="state ${r.status === "未確認" ? "unknown" : ""}">${esc(r.status)}</span></td></tr>`
-          : `<tr><td><div class="entry-name"><span class="entry-icon" aria-hidden="true">${r.kind === "folder" ? "📁" : "📄"}</span><div>${r.kind === "folder" ? `<button class="folder-button" data-row="${i}" title="${esc(r.path)}">${esc(r.name)}</button><div class="entry-detail">配下を含む${!d.root_id ? " · " + esc(r.path) : ""}</div>` : `<div class="filename" title="${esc(r.path)}">${esc(r.name)}</div><div class="entry-detail">このフォルダ直下のファイル</div>`}</div></div></td><td class="num">${bytes(r.bytes)}</td><td class="num">${r.kind === "folder" ? fmt(r.count) + "件" : "—"}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td>${date(r.last_seen)}<br><span class="state ${r.uncertain ? "unknown" : ""}">${r.uncertain ? "未確認 " + fmt(r.uncertain) + "件" : "確認済み"}</span></td></tr>`,
+          ? `<tr><td><div class="filename">${esc(r.name)}</div><div class="path" title="${esc(r.path)}">${esc(r.parent)}</div></td><td class="num" title="${fmt(r.size)} bytes">${bytes(r.size)}</td><td style="white-space:nowrap">${modifiedDate(r.mtime_ns)}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td style="white-space:nowrap">${date(r.first_seen)}</td><td><div style="white-space:nowrap">${date(r.last_seen)}</div><span class="state ${r.status === "未確認" ? "unknown" : ""}">${esc(r.status)}</span></td></tr>`
+          : `<tr><td><div class="entry-name"><span class="entry-icon" aria-hidden="true">${r.kind === "folder" ? "📁" : "📄"}</span><div>${r.kind === "folder" ? `<button class="folder-button" data-row="${i}" title="${esc(r.path)}">${esc(r.name)}</button><div class="entry-detail">配下を含む${!d.root_id ? " · " + esc(r.path) : ""}</div>` : `<div class="filename" title="${esc(r.path)}">${esc(r.name)}</div><div class="entry-detail">このフォルダ直下のファイル</div>`}</div></div></td><td class="num">${bytes(r.bytes)}</td><td style="white-space:nowrap">${r.kind === "folder" ? "—" : modifiedDate(r.mtime_ns)}</td><td class="num">${r.kind === "folder" ? fmt(r.count) + "件" : "—"}</td><td class="num"><span class="age ${r.age >= 30 ? "old" : ""}">${fmt(r.age)}日</span></td><td>${date(r.last_seen)}<br><span class="state ${r.uncertain ? "unknown" : ""}">${r.uncertain ? "未確認 " + fmt(r.uncertain) + "件" : "確認済み"}</span></td></tr>`,
     )
     .join("");
   $("tbody")
@@ -219,7 +222,7 @@ async function list() {
       `${fmt(d.count)}ファイル · 配下の階層をまとめて表示`;
     if (view === "missing") {
       $("location-summary").textContent =
-        `${fmt(d.count)}ファイル · 日時は収集の開始時刻です。前回の収集にエラーがあった場合は、最後に確認できた時点からの変化です。`;
+        `${fmt(d.count)}ファイル · 確認・消失の日時は収集の開始時刻です。ファイル更新日時は最後に取得した値です。前回の収集にエラーがあった場合は、最後に確認できた時点からの変化です。`;
       $("missing-comparisons").textContent =
         (d.comparisons || [])
           .map(
